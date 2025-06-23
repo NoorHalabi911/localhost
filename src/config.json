@@ -1,0 +1,28 @@
+[
+  {
+    "server_name": "Main.Server",
+    "adreses": [
+      { "ip": "127.0.1", "port": 8080 },
+      { "ip": "127.0.1", "port": 9090 }
+    ],
+    "error_msg": {
+      "404": "Not Found",
+      "500": "Internal Server Error",
+      "403": "Forbidden"
+    },
+    "max_body_size": "2M",
+    "routes": [
+      {
+        "path": "/",
+        "root": "/var/www/mysite",
+        "index": "index.html",
+        "methods": ["GET", "POST"]
+      },
+      {
+        "path": "/upload",
+        "root": "/var/www/uploads",
+        "methods": ["POST"]
+      }
+    ]
+  }
+]
