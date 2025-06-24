@@ -1,17 +1,17 @@
 [
   {
     "server_name": "Main.Server",
-    "adreses": [
+    "server_address": [
       { "ip": "127.0.1", "port": 8080 },
       { "ip": "127.0.1", "port": 9090 }
     ],
-    "error_msg": {
+    "error_page": {
       "404": "Not Found",
       "500": "Internal Server Error",
       "403": "Forbidden"
     },
-    "max_body_size": "2M",
-    "routes": [
+    "max_body_size": 2500,
+    "router": [
       {
         "path": "/",
         "root": "/var/www/mysite",
