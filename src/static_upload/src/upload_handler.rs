@@ -22,6 +22,8 @@ if body.len() > MAX_UPLOAD_SIZE {
 }
 
 // 2. التحقق من نوع المحتوى
+
+//multipart/form-data اللي هو النوع المستخدم في رفع الملفات
 if !content_type.starts_with("multipart/form-data; boundary=") {
     return UploadResult::BadRequest;
 }
@@ -33,10 +35,6 @@ let boundary = match content_type.split("boundary=").nth(1){
     None => return UploadResult::BadRequest,
 };
 
-// 4. تقسيم الجسم حسب الباوندري
-let section = body.split(|window|{
-window == &b'\r' || window == &b'\n'
-}).collect::<Vec<&[u8]>>();
 
 // 5. تحويل الجسم إلى سلسلة
 let body_str = match std::str::from_utf8(body){
@@ -81,6 +79,57 @@ for part in parts{
 
 
 
-UploadResult::InternalError
+UploadResult::BadRequest
 
+}
+
+
+
+//////////////////////////////////////////////////////////
+/// 
+/// 
+/// /// تنشئ رد HTTP بناءً على نتيجة رفع الملف
+pub fn build_upload_response(result: UploadResult) -> Vec<u8> {
+    match result {
+        UploadResult::Ok => {
+            let body = "<h1>✅ File uploaded successfully!</h1>".as_bytes();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let mut response = headers.into_bytes();
+            response.extend_from_slice(body);
+            response
+        }
+        UploadResult::PayloadTooLarge => {
+            let body = b"<h1>413 Payload Too Large</h1>";
+            let headers = format!(
+                "HTTP/1.1 413 Payload Too Large\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let mut response = headers.into_bytes();
+            response.extend_from_slice(body);
+            response
+        }
+        UploadResult::BadRequest => {
+            let body = b"<h1>400 Bad Request</h1>";
+            let headers = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let mut response = headers.into_bytes();
+            response.extend_from_slice(body);
+            response
+        }
+        UploadResult::InternalError => {
+            let body = b"<h1>500 Internal Server Error</h1>";
+            let headers = format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let mut response = headers.into_bytes();
+            response.extend_from_slice(body);
+            response
+        }
+    }
 }
