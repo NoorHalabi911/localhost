@@ -6,7 +6,7 @@ pub struct ServerConfig {
     pub server_address: Vec<ServerAddress>, //ip and Port
     pub max_body_size: usize,               // in bytes
     pub router: Vec<RouterConfig>,
-    pub error_page: HashMap<u16, String>, // status code and page path
+    pub error_msg: HashMap<u16, String>, // status code and page path
 }
 #[derive(Debug, PartialEq, Clone, serde::Deserialize)]
 pub struct RouterConfig {

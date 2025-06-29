@@ -1,10 +1,9 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::{
     fs,
     net::{TcpListener, TcpStream},
 };
 mod serverConfig;
-
 use serde::Deserialize;
 use serverConfig::ServerConfig;
 use std::collections::HashMap;
@@ -24,11 +23,15 @@ fn json_parser() -> Vec<ServerConfig> {
 
     let servers: Vec<ServerConfig> =
         serde_json::from_str(&file).expect("JSON was not well-formatted");
+    
+    // let servers: Vec<ServerConfig> =
+    //     serde_yaml::from_str(&file).expect("yaml was not well-formatted");
 
     //for printing the servers configs
     // for server in servers {
     //     println!("Server Name: {:#?}", server);
     // }
+
     servers
 }
 fn listener_socket(server: &ServerConfig) {
@@ -50,6 +53,7 @@ fn listener_socket(server: &ServerConfig) {
 }
 
 fn run_epoll(mut listeners: HashMap<RawFd, TcpListener>) {
+    println!("im in epoll");
     const MAX_EVENTS: usize = 1024;
     let epoll_fd = unsafe { libc::epoll_create1(0) };
     if epoll_fd == -1 {
@@ -134,7 +138,18 @@ fn run_epoll(mut listeners: HashMap<RawFd, TcpListener>) {
                     }
                     Ok(n) => {
                         println!("Read {} bytes from client {}", n, fd);
+                        println!("**************");
+
+                        let response_body = "Hello from server";
+
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                            response_body.len(),
+                            response_body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
                     }
+
                     Err(e) => {
                         eprintln!("Failed to read from client {}: {}", fd, e);
                         unsafe {
