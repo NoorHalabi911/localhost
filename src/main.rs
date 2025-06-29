@@ -9,8 +9,6 @@ use serde::Deserialize;
 use serverConfig::ServerConfig;
 use std::collections::HashMap;
 
-use static_file::{FileResponse, build_http_response, read_static_file};
-
 use libc;
 use std::os::unix::io::{AsRawFd, RawFd}; // Not available on Windows
 
