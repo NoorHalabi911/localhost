@@ -105,8 +105,7 @@ fn run_epoll(mut listeners: HashMap<RawFd, TcpListener>) {
                             libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, client_fd, &mut ev)
                         };
                         if res == -1 {
-                            eprintln!("Failed to add client fd {} to epoll", client
-                            _fd);
+                            eprintln!("Failed to add client fd {} to epoll", client_fd);
                             continue;
                         }
                         clients.insert(client_fd, stream);
