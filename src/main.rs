@@ -10,7 +10,7 @@ use serverConfig::ServerConfig;
 use std::collections::HashMap;
 
 use libc;
-use std::os::unix::io::{AsRawFd, RawFd}; // Not available on Windows
+use std::os::unix::io::{AsRawFd, Ra`wFd}; // Not available on Windows
 
 fn main() {
     let servers = json_parser();
