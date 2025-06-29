@@ -1,16 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)] // 👈 Add Clone here
-pub struct ServerConfig {
-    pub address: String,
-    pub ports: Vec<u16>,
-    pub server_name: Option<String>,
-    pub client_max_body_size: usize,
-    pub error_pages: HashMap<u16, String>,
-    pub routes: Vec<Route>,
-}
-
-#[derive(Debug, Clone)] // 👈 Add Clone here too
+#[derive(Debug, Clone)]
 pub struct Route {
     pub path: String,
     pub methods: Vec<String>,
@@ -21,3 +11,12 @@ pub struct Route {
     pub cgi: Option<HashMap<String, String>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub ports: Vec<u16>,
+    pub server_name: Option<String>,
+    pub client_max_body_size: usize,
+    pub error_pages: HashMap<u16, String>,
+    pub routes: Vec<Route>,
+}
