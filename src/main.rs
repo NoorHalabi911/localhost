@@ -10,7 +10,7 @@ use serverConfig::ServerConfig;
 use std::collections::HashMap;
 
 use libc;
-use std::os::unix::io::{AsRawFd, Ra`wFd}; // Not available on Windows
+use std::os::unix::io::{AsRawFd, RawFd}; // Not available on Windows
 
 fn main() {
     let servers = json_parser();
@@ -105,7 +105,8 @@ fn run_epoll(mut listeners: HashMap<RawFd, TcpListener>) {
                             libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, client_fd, &mut ev)
                         };
                         if res == -1 {
-                            eprintln!("Failed to add client fd {} to epoll", client_fd);
+                            eprintln!("Failed to add client fd {} to epoll", client
+                            _fd);
                             continue;
                         }
                         clients.insert(client_fd, stream);
