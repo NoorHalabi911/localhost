@@ -1,17 +1,46 @@
+use cgi::run_cgi_script; // Not available on Windows
+use libc;
+use serde::Deserialize;
+use serverConfig::ServerConfig;
+use static_file::{FileResponse, build_http_response, read_static_file};
+use std::collections::HashMap;
+use std::env;
+use std::io;
 use std::io::{Read, Write};
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::PathBuf;
 use std::{
     fs,
     net::{TcpListener, TcpStream},
 };
+use upload_handler::{UploadResult, build_upload_response, handle_file_upload}; // Not available on Windows
+mod cgi;
 mod serverConfig;
-use serde::Deserialize;
-use serverConfig::ServerConfig;
-use std::collections::HashMap;
-
-use libc;
-use std::os::unix::io::{AsRawFd, RawFd}; // Not available on Windows
+mod static_file;
+mod upload_handler;
 
 fn main() {
+    // let method = "GET";
+    // let path = "/index.html";
+
+    // if method == "GET" {
+    //     let result = read_static_file(path);
+    //     let response = build_http_response(result);
+    //     println!("--- GET Response ---");
+    //     println!("{}", String::from_utf8_lossy(&response));
+    // }
+
+    // // 2. طلب POST لرفع ملف
+    // let method = "POST";
+    // let content_type = "multipart/form-data; boundary=----XYZ";
+    // let fake_body = fs::read("tests/upload_example_body.txt").unwrap_or_default();
+
+    // if method == "POST" {
+    //     let result = handle_file_upload(&fake_body, content_type);
+    //     let response = build_upload_response(result);
+    //     println!("--- POST Response ---");
+    //     println!("{}", String::from_utf8_lossy(&response));
+    // }
     let servers = json_parser();
     for server in &servers {
         listener_socket(&server);
@@ -23,7 +52,7 @@ fn json_parser() -> Vec<ServerConfig> {
 
     let servers: Vec<ServerConfig> =
         serde_json::from_str(&file).expect("JSON was not well-formatted");
-    
+
     // let servers: Vec<ServerConfig> =
     //     serde_yaml::from_str(&file).expect("yaml was not well-formatted");
 
@@ -55,6 +84,7 @@ fn listener_socket(server: &ServerConfig) {
 fn run_epoll(mut listeners: HashMap<RawFd, TcpListener>) {
     println!("im in epoll");
     const MAX_EVENTS: usize = 1024;
+    let mut buffer = [0; 1024];
     let epoll_fd = unsafe { libc::epoll_create1(0) };
     if epoll_fd == -1 {
         panic!("Failed to create epoll");
@@ -137,17 +167,31 @@ fn run_epoll(mut listeners: HashMap<RawFd, TcpListener>) {
                         continue;
                     }
                     Ok(n) => {
+                        let request = String::from_utf8_lossy(&buffer[..n]);
+                        let path = request
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap_or("/");
+
+                        let file_needed = path.trim_start_matches('/');
+                        let file = handle_path(file_needed);
                         println!("Read {} bytes from client {}", n, fd);
-                        println!("**************");
 
-                        let response_body = "Hello from server";
-
-                        let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                            response_body.len(),
-                            response_body
-                        );
-                        let _ = stream.write_all(response.as_bytes());
+                        match file {
+                            Ok(content) => {
+                                let resp: String = format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
+                                    content.len(),
+                                    content
+                                );
+                                let _ = stream.write_all(resp.as_bytes());
+                            }
+                            Err(_) => {
+                                let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                                let _ = stream.write_all(resp.as_bytes());
+                            }
+                        }
                     }
 
                     Err(e) => {
@@ -170,4 +214,10 @@ fn run_epoll(mut listeners: HashMap<RawFd, TcpListener>) {
             }
         }
     }
+}
+fn handle_path(path: &str) -> io::Result<String> {
+    let mut wd = env::current_dir().unwrap();
+    let file_name = format!("{}.html", path);
+    let html_path = wd.join("html").join(file_name);
+    fs::read_to_string(html_path)
 }
