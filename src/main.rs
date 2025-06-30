@@ -174,10 +174,13 @@ fn run_epoll(mut listeners: HashMap<RawFd, TcpListener>) {
                             .and_then(|line| line.split_whitespace().nth(1))
                             .unwrap_or("/");
 
-                        let file_needed = path.trim_start_matches('/');
-                        let file = handle_path(file_needed);
-                        println!("Read {} bytes from client {}", n, fd);
-
+                        let mut file: Result<String, io::Error>;
+                        if path == "/" {
+                            file = handle_path("def");
+                        } else {
+                            let file_needed = path.trim_start_matches('/');
+                            file = handle_path(file_needed);
+                        }
                         match file {
                             Ok(content) => {
                                 let resp: String = format!(
@@ -192,6 +195,8 @@ fn run_epoll(mut listeners: HashMap<RawFd, TcpListener>) {
                                 let _ = stream.write_all(resp.as_bytes());
                             }
                         }
+
+                        println!("Read {} bytes from client {}", n, fd);
                     }
 
                     Err(e) => {
