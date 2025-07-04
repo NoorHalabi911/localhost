@@ -1,3 +1,4 @@
+use mio::net::TcpStream;
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq, Clone, serde::Deserialize)]
@@ -21,4 +22,10 @@ pub struct RouterConfig {
 pub struct ServerAddress {
     pub ip: String,
     pub port: u16,
+}
+pub struct Connection {
+    pub stream: TcpStream,
+    pub read_buffer: Vec<u8>,
+    pub write_buffer: Vec<u8>,
+    pub is_writing: bool,
 }
