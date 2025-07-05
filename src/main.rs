@@ -66,6 +66,8 @@ fn listener_socket(server: &ServerConfig) -> std::io::Result<()> {
         let socket_addr: std::net::SocketAddr =
             bind_address.parse().expect("Invalid socket address");
 
+        // opens a tcp socket and it become passive
+        // binding is like : I want to listen for connections on this IP:PORT
         let mut listener =
             TcpListener::bind(socket_addr).expect(&format!("Failed to bind to {}", bind_address));
         println!("Listening on {}", bind_address);
@@ -79,9 +81,8 @@ fn listener_socket(server: &ServerConfig) -> std::io::Result<()> {
     run_mio_server(listeners)
 }
 pub fn run_mio_server(mut listeners: HashMap<Token, TcpListener>) -> std::io::Result<()> {
-    let mut poll = Poll::new()?;
+    let mut poll = Poll::new()?; //this is an event loop to watch socket's 
     let mut events = Events::with_capacity(2048);
-    let mut buffer = [0; 2048];
 
     let mut clients: HashMap<Token, Connection> = HashMap::new();
     let mut next_token = listeners.len() + 1;
@@ -90,13 +91,16 @@ pub fn run_mio_server(mut listeners: HashMap<Token, TcpListener>) -> std::io::Re
     for (token, listener) in listeners.iter_mut() {
         poll.registry()
             .register(listener, *token, Interest::READABLE)?;
+        // (*) is de refrence we copy the value and give it the ownership of the copy
     }
 
     println!("Starting mio event loop...");
     loop {
         poll.poll(&mut events, Some(Duration::from_millis(10)))?;
+        //checks every 10ms if any socket is ready for action
 
         for event in events.iter() {
+            //
             let token = event.token();
 
             if listeners.contains_key(&token) {
@@ -128,6 +132,7 @@ pub fn run_mio_server(mut listeners: HashMap<Token, TcpListener>) -> std::io::Re
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             eprintln!("error at wouldBlock {}", e);
+                            // it means there are no more clients waiting
                             break;
                         }
                         Err(e) => {
@@ -149,18 +154,23 @@ pub fn run_mio_server(mut listeners: HashMap<Token, TcpListener>) -> std::io::Re
                         continue;
                     }
                     Ok(n) => {
+                        // we get n bytes from the client we write them in a growable Vec
+                        //becuse you might not get the full Requset in one go
                         conn.read_buffer.extend_from_slice(&temp_buf[..n]);
 
                         if let Some(pos) =
+                            // we look for the ending sequence of the HTTP headers to know if we recive the full request
                             conn.read_buffer.windows(4).position(|w| w == b"\r\n\r\n")
                         {
+                            //this happene if the requset is full
+                            //to get the path bassed on the request path
                             let request = String::from_utf8_lossy(&conn.read_buffer[..pos]);
                             let path = request
                                 .lines()
                                 .next()
                                 .and_then(|line| line.split_whitespace().nth(1))
                                 .unwrap_or("/");
-
+                            // fetch the file needed based of the path
                             let file = if path == "/" {
                                 handle_path("def")
                             } else {
@@ -194,6 +204,11 @@ pub fn run_mio_server(mut listeners: HashMap<Token, TcpListener>) -> std::io::Re
                         continue;
                     }
                 }
+                // this cheaks if the socket is writable
+
+                /*so we write the respone to the client buffer
+                then when it's ready we write it in the straem and when it's
+                finished we clean the buffer and close the connection */
                 if event.is_writable() && conn.is_writing {
                     match conn.stream.write(&conn.write_buffer) {
                         Ok(n) => {
@@ -215,7 +230,10 @@ pub fn run_mio_server(mut listeners: HashMap<Token, TcpListener>) -> std::io::Re
                             println!("Write error to {:?}: {}", token, e);
                             clients.remove(&token);
                             continue;
-                        }
+                        } /*why we do this
+                          only react when socket are ready
+                          never block waiting on slow clients
+                          */
                     }
                 }
             }
