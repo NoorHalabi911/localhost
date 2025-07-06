@@ -40,8 +40,9 @@ fn main() {
 
 fn json_parser() -> Vec<ServerConfig> {
     let mut wd = env::current_dir().unwrap();
+    let config_path = wd.join("src/config.json");
     println!("wd {}", wd.display());
-    let file = fs::read_to_string("config.json").expect("file don't exist");
+    let file = fs::read_to_string(config_path).expect("file don't exist");
     println!("fu=ile {}", file);
     let servers: Vec<ServerConfig> =
         serde_json::from_str(&file).expect("JSON was not well-formatted");
