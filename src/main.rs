@@ -11,6 +11,8 @@ use std::io::{Read, Write};
 use mio::net::{TcpListener, TcpStream};
 use std::{fs, time::Duration};
 use upload_handler::{UploadResult, build_upload_response, handle_file_upload};
+mod session_manager;
+use session_manager::SessionManager;
 
 use crate::serverConfig::Connection;
 mod cgi;
@@ -20,8 +22,9 @@ mod upload_handler;
 
 fn main() {
     let servers = json_parser();
+    let mut session_manager = SessionManager::new(); // create a new session manager
     for server in &servers {
-        listener_socket(&server);
+        listener_socket(&server, &mut session_manager);
     }
 }
 // fn test_cgi()-> Result<(), Box<dyn Error>> {
@@ -58,7 +61,10 @@ fn json_parser() -> Vec<ServerConfig> {
 }
 const SERVER: Token = Token(0);
 
-fn listener_socket(server: &ServerConfig) -> std::io::Result<()> {
+fn listener_socket(
+    server: &ServerConfig,
+    session_manager: &mut SessionManager,
+) -> std::io::Result<()> {
     let mut listeners: HashMap<Token, TcpListener> = HashMap::new();
 
     for address in &server.server_address {
@@ -79,9 +85,12 @@ fn listener_socket(server: &ServerConfig) -> std::io::Result<()> {
         listeners.insert(token, listener);
     }
 
-    run_mio_server(listeners)
+    run_mio_server(listeners, session_manager)
 }
-pub fn run_mio_server(mut listeners: HashMap<Token, TcpListener>) -> std::io::Result<()> {
+pub fn run_mio_server(
+    mut listeners: HashMap<Token, TcpListener>,
+    session_manager: &mut SessionManager,
+) -> std::io::Result<()> {
     let mut poll = Poll::new()?; //this is an event loop to watch socket's 
     let mut events = Events::with_capacity(2048);
 
@@ -171,6 +180,21 @@ pub fn run_mio_server(mut listeners: HashMap<Token, TcpListener>) -> std::io::Re
                                 .next()
                                 .and_then(|line| line.split_whitespace().nth(1))
                                 .unwrap_or("/");
+
+                            // 🪪 extract Cookie header (if exists)
+                            let cookie_header = request
+                                .lines()
+                                .find(|line| line.starts_with("Cookie:"))
+                                .map(|line| line.trim_start_matches("Cookie:").trim());
+
+                            // 🪪 get or create session
+                            let session = session_manager.get_or_create_session(cookie_header);
+
+                            // 🪪 prepare Set-Cookie header (only if session is new)
+                            let set_cookie_header = format!(
+                                "Set-Cookie: session_id={}; Path=/; HttpOnly\r\n",
+                                session.id
+                            );
                             // fetch the file needed based of the path
                             let file = if path == "/" {
                                 handle_path("def")
@@ -180,7 +204,8 @@ pub fn run_mio_server(mut listeners: HashMap<Token, TcpListener>) -> std::io::Re
 
                             conn.write_buffer = match file {
                             Ok(content) => format!(
-                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
+                                    "HTTP/1.1 200 OK\r\n{}Content-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
+                                    set_cookie_header,
                                     content.len(),
                                     content
                                 ).into_bytes(),
