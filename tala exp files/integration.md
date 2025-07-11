@@ -2,12 +2,13 @@
 
 ### **1. Project Structure**
 
-- **src/main.rs**: Main event loop, sets up servers on multiple ports, uses `mio` (epoll-based) for non-blocking I/O.
+- **src/main.rs**: Main event loop, sets up servers on multiple ports, uses `mio` (epoll-based) for non-blocking I/O. Now integrates session management for static file requests.
 - **src/serverConfig.rs**: Parses and holds server configuration (addresses, routes, error pages, etc.).
 - **src/static_file.rs**: Serves static files from a directory, with basic error handling (NotFound, Forbidden).
 - **src/upload_handler.rs**: Handles file uploads via POST, parses multipart/form-data, enforces size limits.
 - **src/cgi.rs**: Runs a Python CGI script, passing request body and PATH_INFO.
 - **src/requests.rs**: Contains HTTP request/response parsing and building logic (not yet fully integrated).
+- **src/session_manager.rs**: Manages sessions and cookies, generates session IDs, and tracks session data.
 - **src/config.json**: JSON config for servers, routes, error pages, etc.
 - **src/html/**: Static HTML files for serving.
 - **src/py.py**: Example Python CGI script.
@@ -20,6 +21,7 @@
 - **Basic config parsing**: Reads config.json for server setup, routes, and error pages.
 - **CGI execution**: Can run a Python script as CGI, passing body and environment.
 - **File upload handler**: Can parse multipart/form-data and save files (with size check).
+- **Session/cookie management**: SessionManager creates and tracks sessions, sets/reuses session cookies for clients (currently for static file requests).
 
 ### **3. Features Partially or Not Yet Integrated**
 
@@ -28,9 +30,21 @@
 - **Error handling**: Error pages are defined in config, but not yet served for all error cases.
 - **Timeouts**: No explicit request timeout handling.
 - **Chunked/unchunked requests**: Not yet implemented.
-- **Cookie/session management**: Not implemented.
+- **Cookie/session management**: Implemented for static file requests; not yet integrated for uploads, CGI, or other handlers.
 - **Directory listing, redirections, method restrictions**: Not implemented.
 - **Integration of all modules**: The event loop only serves static files; upload and CGI are not yet called from the main loop.
+
+---
+
+## **Session Management Flow**
+
+- On each request, the server extracts the `Cookie` header (if present).
+- The `SessionManager` checks for a valid `session_id` in the cookies:
+  - If found and valid, the session is reused.
+  - If not found or invalid, a new session is created and a new `session_id` is generated.
+- The server sets a `Set-Cookie` header in the response if a new session is created.
+- Session data is stored in-memory and can be extended to track user-specific data.
+- Currently, this flow is implemented for static file requests; other handlers will be integrated next.
 
 ---
 
@@ -40,6 +54,7 @@
 
 - **Goal**: All requests (GET, POST, DELETE) are parsed and routed through a single function (e.g., `handle_request`).
 - **How**: Use the parser in `requests.rs` to parse incoming requests. Route based on config and method.
+- **Status**: Session/cookie logic is now present for static file requests.
 
 ### **B. Routing Logic**
 
@@ -59,7 +74,8 @@
 ### **D. HTTP/1.1 Compliance**
 
 - **Goal**: Support GET, POST, DELETE, headers, chunked encoding, cookies, sessions.
-- **How**: Expand the parser and response builder in `requests.rs`. Add cookie/session logic.
+- **How**: Expand the parser and response builder in `requests.rs`. Add cookie/session logic to all handlers.
+- **Status**: Session/cookie logic present for static file requests; expand to other handlers.
 
 ### **E. Timeout Handling**
 
@@ -112,21 +128,21 @@ flowchart TD
 
 ## **Summary Table**
 
-| Feature                        | Status         | File(s)                |
-|---------------------------------|---------------|------------------------|
-| Multi-port server               | Working       | main.rs, serverConfig  |
-| Non-blocking I/O (epoll)        | Working       | main.rs                |
-| Static file serving             | Working       | static_file.rs         |
-| File upload (multipart)         | Implemented   | upload_handler.rs      |
-| CGI (Python)                    | Implemented   | cgi.rs, py.py          |
-| Config parsing                  | Working       | serverConfig.rs, config.json |
-| Routing by config               | Not integrated| main.rs, serverConfig  |
-| Error pages                     | Not integrated| main.rs, config.json   |
-| HTTP/1.1 full compliance        | Partial       | requests.rs            |
-| Timeout handling                | Not implemented| main.rs               |
-| Cookies/sessions                | Not implemented| (to do)               |
-| Directory listing/redirection   | Not implemented| (to do)               |
-| Chunked encoding                | Not implemented| (to do)               |
+| Feature                        | Status                  | File(s)                      |
+|--------------------------------|------------------------|------------------------------|
+| Multi-port server               | Working                | main.rs, serverConfig        |
+| Non-blocking I/O (epoll)        | Working                | main.rs                      |
+| Static file serving             | Working                | static_file.rs               |
+| File upload (multipart)         | Implemented            | upload_handler.rs            |
+| CGI (Python)                    | Implemented            | cgi.rs, py.py                |
+| Config parsing                  | Working                | serverConfig.rs, config.json |
+| Routing by config               | Not integrated         | main.rs, serverConfig        |
+| Error pages                     | Not integrated         | main.rs, config.json         |
+| HTTP/1.1 full compliance        | Partial                | requests.rs                  |
+| Timeout handling                | Not implemented        | main.rs                      |
+| Cookies/sessions                | Static files only      | main.rs, session_manager.rs  |
+| Directory listing/redirection   | Not implemented        | (to do)                      |
+| Chunked encoding                | Not implemented        | (to do)                      |
 
 ---
 

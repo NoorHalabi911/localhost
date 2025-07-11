@@ -1,5 +1,6 @@
 use mio::net::TcpStream;
 use std::collections::HashMap;
+use std::time::Instant;
 
 #[derive(Debug, PartialEq, Clone, serde::Deserialize)]
 pub struct ServerConfig {
@@ -16,6 +17,14 @@ pub struct RouterConfig {
     pub root: String,
     pub index: Option<String>, // default file to serve
     pub cgi: Option<(String, String)>,
+    pub directory_listing: Option<bool>, // enable/disable directory listing for this route
+    pub redirection: Option<RedirectionConfig>, // optional redirection
+}
+
+#[derive(Debug, PartialEq, Clone, serde::Deserialize)]
+pub struct RedirectionConfig {
+    pub target: String,
+    pub status: Option<u16>, // 301 or 302, default to 302
 }
 
 #[derive(Debug, PartialEq, Clone, serde::Deserialize)]
@@ -28,4 +37,5 @@ pub struct Connection {
     pub read_buffer: Vec<u8>,
     pub write_buffer: Vec<u8>,
     pub is_writing: bool,
+    pub last_active: Instant,
 }

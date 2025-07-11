@@ -33,7 +33,16 @@ pub fn handle_file_upload(body: &[u8], content_type: &str) -> UploadResult {
     };
 
     // 5. تحويل الجسم إلى سلسلة
-    let body_str = match std::str::from_utf8(body) {
+    // Support chunked transfer encoding (decode if needed)
+    let body_bytes = if content_type.contains("chunked") {
+        match decode_chunked_body(body) {
+            Ok(decoded) => decoded,
+            Err(_) => return UploadResult::BadRequest,
+        }
+    } else {
+        body.to_vec()
+    };
+    let body_str = match std::str::from_utf8(&body_bytes) {
         Ok(s) => s,
         Err(_) => return UploadResult::BadRequest,
     };
@@ -115,4 +124,29 @@ pub fn build_upload_response(result: UploadResult) -> Vec<u8> {
             response
         }
     }
+}
+
+// Helper to decode chunked transfer encoding
+fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, ()> {
+    let mut decoded = Vec::new();
+    let mut i = 0;
+    while i < body.len() {
+        // Find the next CRLF
+        let crlf = match body[i..].windows(2).position(|w| w == b"\r\n") {
+            Some(pos) => i + pos,
+            None => return Err(()),
+        };
+        let len_str = std::str::from_utf8(&body[i..crlf]).map_err(|_| ())?;
+        let chunk_size = usize::from_str_radix(len_str.trim(), 16).map_err(|_| ())?;
+        if chunk_size == 0 {
+            break;
+        }
+        i = crlf + 2;
+        if i + chunk_size > body.len() {
+            return Err(());
+        }
+        decoded.extend_from_slice(&body[i..i + chunk_size]);
+        i += chunk_size + 2; // skip chunk and trailing CRLF
+    }
+    Ok(decoded)
 }

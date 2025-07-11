@@ -2,7 +2,7 @@ use cgi::run_cgi_script;
 use mio::{Events, Interest, Poll, Token};
 use serde::Deserialize;
 use serverConfig::ServerConfig;
-use static_file::{FileResponse, build_http_response, read_static_file};
+use static_file::{FileResponse, build_http_response, read_static_file_with_listing};
 use std::collections::HashMap;
 use std::env;
 use std::io;
@@ -10,21 +10,26 @@ use std::io::{Read, Write};
 // use std::os::unix::io::{AsRawFd, RawFd};
 use mio::net::{TcpListener, TcpStream};
 use std::{fs, time::Duration};
+use std::time::Instant;
 use upload_handler::{UploadResult, build_upload_response, handle_file_upload};
+use requests::{parse_http_request, build_response, Request, Response};
 mod session_manager;
 use session_manager::SessionManager;
 
 use crate::serverConfig::Connection;
 mod cgi;
+mod requests;
 mod serverConfig;
 mod static_file;
 mod upload_handler;
+
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn main() {
     let servers = json_parser();
     let mut session_manager = SessionManager::new(); // create a new session manager
     for server in &servers {
-        listener_socket(&server, &mut session_manager);
+        listener_socket(server, &mut session_manager, server);
     }
 }
 // fn test_cgi()-> Result<(), Box<dyn Error>> {
@@ -64,6 +69,7 @@ const SERVER: Token = Token(0);
 fn listener_socket(
     server: &ServerConfig,
     session_manager: &mut SessionManager,
+    server_config: &ServerConfig,
 ) -> std::io::Result<()> {
     let mut listeners: HashMap<Token, TcpListener> = HashMap::new();
 
@@ -85,11 +91,326 @@ fn listener_socket(
         listeners.insert(token, listener);
     }
 
-    run_mio_server(listeners, session_manager)
+    run_mio_server(listeners, session_manager, server_config)
 }
+
+// Centralized request handler
+fn handle_request(
+    raw_request: &str,
+    session_manager: &mut SessionManager,
+    server_config: &ServerConfig,
+) -> Vec<u8> {
+    // Helper to load custom error page if configured
+    fn custom_error_body(code: u16, config: &ServerConfig) -> Option<Vec<u8>> {
+        if let Some(page_name) = config.error_msg.get(&code) {
+            let path = format!("html/{}.html", page_name.replace(' ', "_").to_lowercase());
+            if let Ok(contents) = std::fs::read(&path) {
+                return Some(contents);
+            }
+        }
+        None
+    }
+    // Parse the HTTP request
+    let req = match parse_http_request(raw_request) {
+        Some(r) => r,
+        None => {
+            let mut headers = HashMap::new();
+            let body = custom_error_body(400, server_config)
+                .unwrap_or_else(|| b"<h1>400 Bad Request</h1>".to_vec());
+            headers.insert("Content-Type".to_string(), "text/html".to_string());
+            return build_response(Response {
+                status_code: 400,
+                reason_phrase: "Bad Request".to_string(),
+                headers,
+                body,
+            });
+        }
+    };
+    // Session management
+    let cookie_header = req.headers.get("Cookie").map(|s| s.as_str());
+    let session = session_manager.get_or_create_session(cookie_header);
+    let mut set_cookie_header = None;
+    if cookie_header.is_none() || !cookie_header.unwrap().contains(&session.id) {
+        set_cookie_header = Some(format!("session_id={}; Path=/; HttpOnly", session.id));
+    }
+    // Routing: find matching route
+    let route = server_config.router.iter().find(|r| req.path.starts_with(&r.path));
+    if let Some(route) = route {
+        // Redirection support
+        if let Some(redir) = &route.redirection {
+            let status = redir.status.unwrap_or(302);
+            let reason = match status {
+                301 => "Moved Permanently",
+                302 => "Found",
+                307 => "Temporary Redirect",
+                308 => "Permanent Redirect",
+                _ => "Found",
+            };
+            let mut headers = HashMap::new();
+            headers.insert("Location".to_string(), redir.target.clone());
+            if let Some(cookie) = set_cookie_header.clone() {
+                headers.insert("Set-Cookie".to_string(), cookie);
+            }
+            return build_response(Response {
+                status_code: status,
+                reason_phrase: reason.to_string(),
+                headers,
+                body: Vec::new(),
+            });
+        }
+        // Method allowed?
+        if !route.methods.iter().any(|m| m == &req.method) {
+            let mut headers = HashMap::new();
+            headers.insert("Content-Type".to_string(), "text/html".to_string());
+            if let Some(cookie) = set_cookie_header.clone() {
+                headers.insert("Set-Cookie".to_string(), cookie);
+            }
+            let body = custom_error_body(405, server_config)
+                .unwrap_or_else(|| b"<h1>405 Method Not Allowed</h1>".to_vec());
+            return build_response(Response {
+                status_code: 405,
+                reason_phrase: "Method Not Allowed".to_string(),
+                headers,
+                body,
+            });
+        }
+        // CGI handler
+        if let Some((ext, script)) = &route.cgi {
+            if req.path.ends_with(ext) {
+                let path_info = &req.path;
+                match run_cgi_script(script, std::str::from_utf8(&req.body).unwrap_or(""), path_info) {
+                    Ok(output) => {
+                        let mut headers = HashMap::new();
+                        headers.insert("Content-Type".to_string(), "text/plain".to_string());
+                        if let Some(cookie) = set_cookie_header.clone() {
+                            headers.insert("Set-Cookie".to_string(), cookie);
+                        }
+                        return build_response(Response {
+                            status_code: 200,
+                            reason_phrase: "OK".to_string(),
+                            headers,
+                            body: output.into_bytes(),
+                        });
+                    }
+                    Err(_) => {
+                        let mut headers = HashMap::new();
+                        headers.insert("Content-Type".to_string(), "text/html".to_string());
+                        if let Some(cookie) = set_cookie_header.clone() {
+                            headers.insert("Set-Cookie".to_string(), cookie);
+                        }
+                        let body = custom_error_body(500, server_config)
+                            .unwrap_or_else(|| b"<h1>500 Internal Server Error</h1>".to_vec());
+                        return build_response(Response {
+                            status_code: 500,
+                            reason_phrase: "Internal Server Error".to_string(),
+                            headers,
+                            body,
+                        });
+                    }
+                }
+            }
+        }
+        // Upload handler
+        if req.method == "POST" && route.path == "/upload" {
+            let content_type = req.headers.get("Content-Type").map(|s| s.as_str()).unwrap_or("");
+            let result = handle_file_upload(&req.body, content_type);
+            let mut response = build_upload_response(result);
+            if let Some(cookie) = set_cookie_header {
+                // Insert Set-Cookie header if needed
+                let mut resp_str = String::from_utf8_lossy(&response).to_string();
+                let insert_pos = resp_str.find("\r\n\r\n").unwrap_or(resp_str.len());
+                resp_str.insert_str(insert_pos, &format!("Set-Cookie: {}\r\n", cookie));
+                return resp_str.into_bytes();
+            }
+            return response;
+        }
+        // DELETE handler
+        if req.method == "DELETE" {
+            // Only allow DELETE for files, not directories
+            let rel_path = if req.path == "/" { "" } else { &req.path[1..] };
+            let base = std::path::Path::new(&route.root);
+            let full_path = base.join(rel_path);
+            let full_path = match std::fs::canonicalize(&full_path) {
+                Ok(path) => path,
+                Err(_) => {
+                    let body = custom_error_body(404, server_config)
+                        .unwrap_or_else(|| b"<h1>404 Not Found</h1>".to_vec());
+                    return build_response(Response {
+                        status_code: 404,
+                        reason_phrase: "Not Found".to_string(),
+                        headers: {
+                            let mut h = HashMap::new();
+                            h.insert("Content-Type".to_string(), "text/html".to_string());
+                            if let Some(cookie) = set_cookie_header.clone() {
+                                h.insert("Set-Cookie".to_string(), cookie);
+                            }
+                            h
+                        },
+                        body,
+                    });
+                }
+            };
+            if !full_path.starts_with(std::fs::canonicalize(base).unwrap()) {
+                let body = custom_error_body(403, server_config)
+                    .unwrap_or_else(|| b"<h1>403 Forbidden</h1>".to_vec());
+                return build_response(Response {
+                    status_code: 403,
+                    reason_phrase: "Forbidden".to_string(),
+                    headers: {
+                        let mut h = HashMap::new();
+                        h.insert("Content-Type".to_string(), "text/html".to_string());
+                        if let Some(cookie) = set_cookie_header.clone() {
+                            h.insert("Set-Cookie".to_string(), cookie);
+                        }
+                        h
+                    },
+                    body,
+                });
+            }
+            if full_path.is_dir() {
+                let body = custom_error_body(403, server_config)
+                    .unwrap_or_else(|| b"<h1>403 Forbidden</h1>".to_vec());
+                return build_response(Response {
+                    status_code: 403,
+                    reason_phrase: "Forbidden".to_string(),
+                    headers: {
+                        let mut h = HashMap::new();
+                        h.insert("Content-Type".to_string(), "text/html".to_string());
+                        if let Some(cookie) = set_cookie_header.clone() {
+                            h.insert("Set-Cookie".to_string(), cookie);
+                        }
+                        h
+                    },
+                    body,
+                });
+            }
+            match std::fs::remove_file(&full_path) {
+                Ok(_) => {
+                    let body = b"<h1>File deleted successfully</h1>".to_vec();
+                    return build_response(Response {
+                        status_code: 200,
+                        reason_phrase: "OK".to_string(),
+                        headers: {
+                            let mut h = HashMap::new();
+                            h.insert("Content-Type".to_string(), "text/html".to_string());
+                            if let Some(cookie) = set_cookie_header.clone() {
+                                h.insert("Set-Cookie".to_string(), cookie);
+                            }
+                            h
+                        },
+                        body,
+                    });
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let body = custom_error_body(404, server_config)
+                        .unwrap_or_else(|| b"<h1>404 Not Found</h1>".to_vec());
+                    return build_response(Response {
+                        status_code: 404,
+                        reason_phrase: "Not Found".to_string(),
+                        headers: {
+                            let mut h = HashMap::new();
+                            h.insert("Content-Type".to_string(), "text/html".to_string());
+                            if let Some(cookie) = set_cookie_header.clone() {
+                                h.insert("Set-Cookie".to_string(), cookie);
+                            }
+                            h
+                        },
+                        body,
+                    });
+                }
+                Err(_) => {
+                    let body = custom_error_body(500, server_config)
+                        .unwrap_or_else(|| b"<h1>500 Internal Server Error</h1>".to_vec());
+                    return build_response(Response {
+                        status_code: 500,
+                        reason_phrase: "Internal Server Error".to_string(),
+                        headers: {
+                            let mut h = HashMap::new();
+                            h.insert("Content-Type".to_string(), "text/html".to_string());
+                            if let Some(cookie) = set_cookie_header.clone() {
+                                h.insert("Set-Cookie".to_string(), cookie);
+                            }
+                            h
+                        },
+                        body,
+                    });
+                }
+            }
+        }
+        // Static file handler
+        let rel_path = if req.path == "/" { "" } else { &req.path[1..] };
+        let file_response = read_static_file_with_listing(
+            rel_path,
+            &route.root,
+            route.index.as_deref(),
+            route.directory_listing.unwrap_or(false),
+        );
+        let mut response = match &file_response {
+            FileResponse::Ok(_) | FileResponse::DirectoryListing(_) => build_http_response(file_response),
+            FileResponse::NotFound => {
+                let body = custom_error_body(404, server_config)
+                    .unwrap_or_else(|| b"<h1>404 Not Found</h1>".to_vec());
+                build_response(Response {
+                    status_code: 404,
+                    reason_phrase: "Not Found".to_string(),
+                    headers: {
+                        let mut h = HashMap::new();
+                        h.insert("Content-Type".to_string(), "text/html".to_string());
+                        if let Some(cookie) = set_cookie_header.clone() {
+                            h.insert("Set-Cookie".to_string(), cookie);
+                        }
+                        h
+                    },
+                    body,
+                })
+            },
+            FileResponse::Forbidden => {
+                let body = custom_error_body(403, server_config)
+                    .unwrap_or_else(|| b"<h1>403 Forbidden</h1>".to_vec());
+                build_response(Response {
+                    status_code: 403,
+                    reason_phrase: "Forbidden".to_string(),
+                    headers: {
+                        let mut h = HashMap::new();
+                        h.insert("Content-Type".to_string(), "text/html".to_string());
+                        if let Some(cookie) = set_cookie_header.clone() {
+                            h.insert("Set-Cookie".to_string(), cookie);
+                        }
+                        h
+                    },
+                    body,
+                })
+            },
+        };
+        if let Some(cookie) = set_cookie_header {
+            // Insert Set-Cookie header if needed
+            let mut resp_str = String::from_utf8_lossy(&response).to_string();
+            let insert_pos = resp_str.find("\r\n\r\n").unwrap_or(resp_str.len());
+            resp_str.insert_str(insert_pos, &format!("Set-Cookie: {}\r\n", cookie));
+            return resp_str.into_bytes();
+        }
+        return response;
+    }
+    // No matching route
+    let mut headers = HashMap::new();
+    headers.insert("Content-Type".to_string(), "text/html".to_string());
+    if let Some(cookie) = set_cookie_header {
+        headers.insert("Set-Cookie".to_string(), cookie);
+    }
+    let body = custom_error_body(404, server_config)
+        .unwrap_or_else(|| b"<h1>404 Not Found</h1>".to_vec());
+    build_response(Response {
+        status_code: 404,
+        reason_phrase: "Not Found".to_string(),
+        headers,
+        body,
+    })
+}
+
 pub fn run_mio_server(
     mut listeners: HashMap<Token, TcpListener>,
     session_manager: &mut SessionManager,
+    server_config: &ServerConfig,
 ) -> std::io::Result<()> {
     let mut poll = Poll::new()?; //this is an event loop to watch socket's 
     let mut events = Events::with_capacity(2048);
@@ -101,30 +422,20 @@ pub fn run_mio_server(
     for (token, listener) in listeners.iter_mut() {
         poll.registry()
             .register(listener, *token, Interest::READABLE)?;
-        // (*) is de refrence we copy the value and give it the ownership of the copy
     }
 
     println!("Starting mio event loop...");
     loop {
         poll.poll(&mut events, Some(Duration::from_millis(10)))?;
-        //checks every 10ms if any socket is ready for action
-
         for event in events.iter() {
-            //
             let token = event.token();
-
             if listeners.contains_key(&token) {
                 let listener = listeners.get_mut(&token).unwrap();
-
                 loop {
                     match listener.accept() {
                         Ok((mut stream, addr)) => {
-                            println!("New connection from {:?}", addr);
-                            // mio::net::TcpStream is non-blocking by default
                             let client_token = Token(next_token);
-                            println!("client token {:?}", client_token);
                             next_token += 1;
-
                             poll.registry().register(
                                 &mut stream,
                                 client_token,
@@ -137,16 +448,14 @@ pub fn run_mio_server(
                                     read_buffer: Vec::new(),
                                     write_buffer: Vec::new(),
                                     is_writing: false,
+                                    last_active: Instant::now(),
                                 },
                             );
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            eprintln!("error at wouldBlock {}", e);
-                            // it means there are no more clients waiting
                             break;
                         }
-                        Err(e) => {
-                            eprintln!("Accept failed: {}", e);
+                        Err(_) => {
                             break;
                         }
                     }
@@ -154,66 +463,22 @@ pub fn run_mio_server(
                 continue;
             }
             if let Some(conn) = clients.get_mut(&token) {
-                println!("we are at clients.get_mut");
                 let mut temp_buf = [0; 2048];
                 match conn.stream.read(&mut temp_buf) {
-                    // if the client disconects remove it by token
                     Ok(0) => {
-                        println!("Client {:?} disconnected", token);
                         clients.remove(&token);
                         continue;
                     }
                     Ok(n) => {
-                        // we get n bytes from the client we write them in a growable Vec
-                        //becuse you might not get the full Requset in one go
                         conn.read_buffer.extend_from_slice(&temp_buf[..n]);
-
-                        if let Some(pos) =
-                            // we look for the ending sequence of the HTTP headers to know if we recive the full request
-                            conn.read_buffer.windows(4).position(|w| w == b"\r\n\r\n")
-                        {
-                            //this happene if the requset is full
-                            //to get the path bassed on the request path
-                            let request = String::from_utf8_lossy(&conn.read_buffer[..pos]);
-                            let path = request
-                                .lines()
-                                .next()
-                                .and_then(|line| line.split_whitespace().nth(1))
-                                .unwrap_or("/");
-
-                            // 🪪 extract Cookie header (if exists)
-                            let cookie_header = request
-                                .lines()
-                                .find(|line| line.starts_with("Cookie:"))
-                                .map(|line| line.trim_start_matches("Cookie:").trim());
-
-                            // 🪪 get or create session
-                            let session = session_manager.get_or_create_session(cookie_header);
-
-                            // 🪪 prepare Set-Cookie header (only if session is new)
-                            let set_cookie_header = format!(
-                                "Set-Cookie: session_id={}; Path=/; HttpOnly\r\n",
-                                session.id
-                            );
-                            // fetch the file needed based of the path
-                            let file = if path == "/" {
-                                handle_path("def")
-                            } else {
-                                handle_path(path.trim_start_matches('/'))
-                            };
-
-                            conn.write_buffer = match file {
-                            Ok(content) => format!(
-                                    "HTTP/1.1 200 OK\r\n{}Content-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
-                                    set_cookie_header,
-                                    content.len(),
-                                    content
-                                ).into_bytes(),
-                            Err(_) => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec(),
-                        };
+                        conn.last_active = Instant::now();
+                        if let Some(pos) = conn.read_buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let request = String::from_utf8_lossy(&conn.read_buffer[..]);
+                            // Use the centralized handler
+                            let response = handle_request(&request, session_manager, server_config);
+                            conn.write_buffer = response;
                             conn.is_writing = true;
-                            conn.read_buffer.clear(); // clear the memory client after handling
-
+                            conn.read_buffer.clear();
                             poll.registry().reregister(
                                 &mut conn.stream,
                                 token,
@@ -221,47 +486,43 @@ pub fn run_mio_server(
                             )?;
                         }
                     }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        println!("not ready to read yet");
-                    }
-                    Err(e) => {
-                        println!("Failed to read from client {:?}: {}", token, e);
-                        clients.remove(&token); // and error from the client we remove
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => {
+                        clients.remove(&token);
                         continue;
                     }
                 }
-                // this cheaks if the socket is writable
-
-                /*so we write the respone to the client buffer
-                then when it's ready we write it in the straem and when it's
-                finished we clean the buffer and close the connection */
                 if event.is_writable() && conn.is_writing {
                     match conn.stream.write(&conn.write_buffer) {
                         Ok(n) => {
                             conn.write_buffer.drain(..n);
-
                             if conn.write_buffer.is_empty() {
                                 conn.is_writing = false;
-                                // Properly shutdown the stream before removing
                                 let _ = conn.stream.shutdown(std::net::Shutdown::Both);
                                 poll.registry().deregister(&mut conn.stream)?;
                                 clients.remove(&token);
-                                println!("After write");
                             }
                         }
-                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            // Wait until ready again
-                        }
-                        Err(e) => {
-                            println!("Write error to {:?}: {}", token, e);
+                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(_) => {
                             clients.remove(&token);
                             continue;
-                        } /*why we do this
-                          only react when socket are ready
-                          never block waiting on slow clients
-                          */
+                        }
                     }
                 }
+            }
+        }
+        // Timeout check: remove clients that have been idle for too long
+        let now = Instant::now();
+        let timed_out: Vec<Token> = clients.iter()
+            .filter(|(_, conn)| now.duration_since(conn.last_active) > CLIENT_TIMEOUT)
+            .map(|(token, _)| *token)
+            .collect();
+        for token in timed_out {
+            if let Some(mut conn) = clients.remove(&token) {
+                println!("Client {:?} timed out and was disconnected", token);
+                let _ = conn.stream.shutdown(std::net::Shutdown::Both);
+                poll.registry().deregister(&mut conn.stream).ok();
             }
         }
     }
@@ -274,3 +535,4 @@ fn handle_path(path: &str) -> io::Result<String> {
     println!("html path {}", html_path.display());
     fs::read_to_string(html_path)
 }
+

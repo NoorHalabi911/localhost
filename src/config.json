@@ -14,13 +14,14 @@
     "router": [
       {
         "path": "/",
-        "root": "/var/www/mysite",
+        "root": "./public",
         "index": "index.html",
-        "methods": ["GET", "POST"]
+        "methods": ["GET", "POST", "DELETE"],
+        "directory_listing": true
       },
       {
         "path": "/upload",
-        "root": "/var/www/uploads",
+        "root": "/",
         "methods": ["POST"]
       }
     ]
