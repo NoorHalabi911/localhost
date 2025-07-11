@@ -1,500 +1,149 @@
-Let's break down your requirements and current state, then create a clear plan to connect all components and guide you to a fully functional HTTP server in Rust, as specified.
+## **Current Features Implemented**
+
+### **1. Project Structure**
+
+- **src/main.rs**: Main event loop, sets up servers on multiple ports, uses `mio` (epoll-based) for non-blocking I/O.
+- **src/serverConfig.rs**: Parses and holds server configuration (addresses, routes, error pages, etc.).
+- **src/static_file.rs**: Serves static files from a directory, with basic error handling (NotFound, Forbidden).
+- **src/upload_handler.rs**: Handles file uploads via POST, parses multipart/form-data, enforces size limits.
+- **src/cgi.rs**: Runs a Python CGI script, passing request body and PATH_INFO.
+- **src/requests.rs**: Contains HTTP request/response parsing and building logic (not yet fully integrated).
+- **src/config.json**: JSON config for servers, routes, error pages, etc.
+- **src/html/**: Static HTML files for serving.
+- **src/py.py**: Example Python CGI script.
+
+### **2. Features Already Working**
+
+- **Multiple server/port support**: Listens on multiple addresses/ports as defined in config.
+- **Non-blocking, single-threaded event loop**: Uses `mio` (epoll) for all I/O.
+- **Basic static file serving**: Serves HTML files for GET requests.
+- **Basic config parsing**: Reads config.json for server setup, routes, and error pages.
+- **CGI execution**: Can run a Python script as CGI, passing body and environment.
+- **File upload handler**: Can parse multipart/form-data and save files (with size check).
+
+### **3. Features Partially or Not Yet Integrated**
+
+- **Full HTTP/1.1 compliance**: Only basic GET parsing; POST/DELETE, headers, chunked encoding, cookies, sessions, etc. are not fully handled.
+- **Routing logic**: Not yet using config to route requests to static, upload, or CGI handlers.
+- **Error handling**: Error pages are defined in config, but not yet served for all error cases.
+- **Timeouts**: No explicit request timeout handling.
+- **Chunked/unchunked requests**: Not yet implemented.
+- **Cookie/session management**: Not implemented.
+- **Directory listing, redirections, method restrictions**: Not implemented.
+- **Integration of all modules**: The event loop only serves static files; upload and CGI are not yet called from the main loop.
 
 ---
 
-## 1. **Project Structure Discovery**
+## **Integration Plan (Step-by-Step)**
 
-From your attached files and folder structure, you have:
+### **A. Centralize Request Handling**
 
-- `src/main.rs`: Main server logic, uses `mio` for evented I/O (epoll equivalent).
-- `src/cgi.rs`: Presumably for CGI handling.
-- `src/serverConfig.rs`: Server configuration parsing and types.
-- `src/static_file.rs`: Static file serving logic.
-- `src/upload_handler.rs`: File upload handling.
-- `src/html/`: HTML files (static content).
-- `src/config.json`: Configuration file (JSON).
-- `src/py.py`: Python script, likely for CGI.
-- `roadmap/`: Images, probably for planning.
-- `t.tldr`: Large text file, possibly documentation.
-
----
-
-## 2. **Current State Analysis**
-
-Your `main.rs` already:
-
-- Parses a config file.
-- Listens on multiple addresses/ports.
-- Uses `mio` (epoll-based) for non-blocking I/O.
-- Handles basic HTTP GET requests for static HTML files.
-
-**What’s missing or incomplete:**
-
-- Full HTTP/1.1 compliance (methods, headers, chunked encoding, etc.).
-- POST, DELETE, and file upload support.
-- Cookie/session management.
-- Error page handling (400, 403, 404, 405, 413, 500).
-- CGI execution based on file extension.
-- Route configuration (methods, redirection, root dir, default file, CGI, directory listing).
-- Timeout handling for requests.
-- Chunked/unchunked request management.
-- Only one epoll call per client/server communication.
-- All reads/writes via epoll.
-- No use of server crates like tokio/nix.
-
----
-
-## 3. **Step-by-Step Plan**
-
-### **A. Configuration**
-
-- [ ] Expand `serverConfig.rs` to support all config options (routes, error pages, body size, etc.).
-- [ ] Parse and validate `config.json` for all required fields.
-
-### **B. HTTP Protocol Handling**
-
-- [ ] Parse HTTP/1.1 requests (GET, POST, DELETE, headers, cookies, chunked encoding).
-- [ ] Build correct HTTP responses (status, headers, body, chunked/unchunked).
-- [ ] Implement timeout logic for requests.
-
-### **C. Routing**
-
-- [ ] Route requests based on config (root dir, default file, allowed methods, redirection, CGI, directory listing).
-
-### **D. Static Files & Uploads**
-
-- [ ] Serve static files from configured directories.
-- [ ] Handle file uploads (multipart/form-data, size limits).
-
-### **E. CGI**
-
-- [ ] Execute CGI scripts based on file extension (e.g., `.py`).
-- [ ] Set up environment variables (PATH_INFO, etc.).
-- [ ] Fork process for CGI, handle input/output.
-
-### **F. Error Handling**
-
-- [ ] Serve custom error pages for 400, 403, 404, 405, 413, 500.
-
-### **G. Cookies & Sessions**
-
-- [ ] Parse and set cookies.
-- [ ] Implement basic session management (in-memory or file-based).
-
-### **H. Epoll/Non-blocking I/O**
-
-- [ ] Ensure all I/O is non-blocking and goes through `mio` (epoll).
-- [ ] Only one epoll call per client/server communication.
-
----
-
-## 4. **How We'll Proceed**
-
-1. **Review and expand your config system** (`serverConfig.rs` and `config.json`).
-2. **Upgrade your HTTP parser** to handle all required methods, headers, and chunked encoding.
-3. **Implement routing logic** based on config.
-4. **Integrate static file, upload, and CGI handling** into the main event loop.
-5. **Add error handling, cookies, and sessions**.
-6. **Test and refine for robustness and compliance**.
-
----
-
-## 5. **Next Step: Configuration System**
-
-**Let's start by reviewing your `serverConfig.rs` and `config.json` to ensure they can support all the required configuration options.**
-
-**Would you like to:**
-
-- See a proposed schema for `config.json` and the corresponding Rust structs?
-- Or, would you like to review your current `serverConfig.rs` and `config.json` first?
-
-**Let me know your preference, and I'll guide you step by step!**
-
----
-
-Great! Let's make a clear, actionable plan to connect all your components and get your HTTP server fully working, step by step.
-
----
-
-## **1. Current State Recap**
-
-You have these main modules:
-
-- `main.rs`: Entry point, event loop, basic request handling.
-- `cgi.rs`: For CGI script execution.
-- `serverConfig.rs`: For config parsing and server settings.
-- `static_file.rs`: For serving static files.
-- `upload_handler.rs`: For handling file uploads.
-
-But, as you said, **most functions are not yet connected** in the main event loop. The server currently only serves static HTML files for GET requests.
-
----
-
-## **2. What Needs to Happen**
-
-To connect everything, your event loop (in `run_mio_server`) must:
-
-- Parse the HTTP request (method, path, headers, body).
-- Route the request:
-  - Serve static files (GET).
-  - Handle file uploads (POST).
-  - Run CGI scripts (e.g., for `.py` files).
-  - Return error pages for unsupported methods, not found, etc.
-- Set correct HTTP status, headers, and body.
-- Support multiple methods (GET, POST, DELETE).
-- Handle cookies and sessions.
-- Use config for routing, error pages, etc.
-
----
-
-## **3. Step-by-Step Connection Plan**
-
-### **A. Centralize Request Parsing**
-
-- Parse the HTTP request fully (method, path, headers, body).
-- Decide what to do based on method and path.
+- **Goal**: All requests (GET, POST, DELETE) are parsed and routed through a single function (e.g., `handle_request`).
+- **How**: Use the parser in `requests.rs` to parse incoming requests. Route based on config and method.
 
 ### **B. Routing Logic**
 
-- If path matches a static file, use `static_file.rs`.
-- If path is for upload, use `upload_handler.rs`.
-- If file extension matches CGI, use `cgi.rs`.
-- If not found or method not allowed, serve error page.
+- **Goal**: Use config to decide if a request should be served as static, upload, or CGI.
+- **How**: For each request:
+  - Match the path and method to a route in config.
+  - If method not allowed, return 405.
+  - If route has a CGI extension, call `run_cgi_script`.
+  - If route is for upload, call `handle_file_upload`.
+  - Otherwise, serve static file.
 
-### **C. Integrate All Components**
+### **C. Error Handling**
 
-- Call the right handler from the event loop.
-- Build the HTTP response (status, headers, body).
-- Write the response back to the client.
+- **Goal**: Serve custom error pages for 400, 403, 404, 405, 413, 500 as defined in config.
+- **How**: On error, look up the error page path in config and serve it.
 
-### **D. Use Config**
+### **D. HTTP/1.1 Compliance**
 
-- Use `serverConfig.rs` to get routing, error pages, etc.
+- **Goal**: Support GET, POST, DELETE, headers, chunked encoding, cookies, sessions.
+- **How**: Expand the parser and response builder in `requests.rs`. Add cookie/session logic.
 
----
+### **E. Timeout Handling**
 
-## **4. What You Need to Do Next**
+- **Goal**: Disconnect clients if requests take too long.
+- **How**: Use `mio`’s timer or track timestamps per connection.
 
-### **Step 1: Centralize Request Handling**
+### **F. Directory Listing, Redirections, Index Files**
 
-In your event loop (`run_mio_server`), after you parse the request, call a new function, e.g., `handle_request`, that:
+- **Goal**: Support directory listing, redirections, and default index files as per config.
+- **How**: Implement logic in the router to check for these settings.
 
-- Takes the parsed request and config.
-- Returns a response (status, headers, body).
+### **G. Only One Epoll Call Per Communication**
 
-**Example:**
-
-```rust
-let response = handle_request(&request, &server_config);
-conn.write_buffer = response.into_bytes();
-```
-
-### **Step 2: Implement `handle_request`**
-
-This function should:
-
-- Match the method (GET, POST, DELETE).
-- Use the path to decide:
-  - Static file? → `static_file.rs`
-  - Upload? → `upload_handler.rs`
-  - CGI? → `cgi.rs`
-  - Not found? → error page
-
-### **Step 3: Connect Each Module**
-
-- **static_file.rs**: Serve files, return 404 if not found.
-- **upload_handler.rs**: Handle POST with file upload, check size limits.
-- **cgi.rs**: If path ends with `.py`, run CGI and return output.
-- **serverConfig.rs**: Use config to get root dirs, error pages, allowed methods, etc.
-
-### **Step 4: Error Handling**
-
-- If anything fails, serve the correct error page (from config).
+- **Goal**: Ensure all reads/writes go through epoll, and only one call per client/server communication.
+- **How**: Already mostly handled by `mio`, but review event loop for compliance.
 
 ---
 
-## **5. Example Flow (Pseudocode)**
+## **What’s Missing (To-Do List)**
 
-```rust
-fn handle_request(request: &HttpRequest, config: &ServerConfig) -> HttpResponse {
-    match request.method {
-        "GET" => {
-            if is_cgi(&request.path) {
-                run_cgi_script(...)
-            } else {
-                serve_static_file(...)
-            }
-        }
-        "POST" => {
-            if is_upload_path(&request.path) {
-                handle_file_upload(...)
-            } else if is_cgi(&request.path) {
-                run_cgi_script(...)
-            } else {
-                error_response(405)
-            }
-        }
-        "DELETE" => {
-            // Implement delete logic or error
-        }
-        _ => error_response(405)
-    }
-}
+- [ ] Integrate `requests.rs` parser and response builder into the main event loop.
+- [ ] Implement `handle_request` to route requests using config and call the correct handler (static, upload, CGI, error).
+- [ ] Expand HTTP parsing to support all required methods, headers, chunked encoding, cookies, and sessions.
+- [ ] Implement timeout logic for requests.
+- [ ] Serve custom error pages for all error cases.
+- [ ] Add directory listing, redirection, and index file support.
+- [ ] Ensure all I/O is non-blocking and goes through epoll.
+- [ ] Add tests for all features and error cases.
+
+---
+
+## **Integration Plan (Visual)**
+
+```mermaid
+flowchart TD
+    A[Event Loop (mio)] --> B[Parse HTTP Request (requests.rs)]
+    B --> C{Route by Config}
+    C -- Static File --> D[static_file.rs]
+    C -- Upload --> E[upload_handler.rs]
+    C -- CGI --> F[cgi.rs]
+    C -- Error --> G[Serve Error Page]
+    D --> H[Build HTTP Response]
+    E --> H
+    F --> H
+    G --> H
+    H --> I[Write to Client (epoll)]
 ```
 
 ---
 
-## **6. Next Steps for You**
+## **Summary Table**
 
-1. **Create a `handle_request` function** that takes a parsed request and config, and returns a response.
-2. **Update your event loop** to use this function for every request.
-3. **Wire up each module** (static file, upload, CGI) inside `handle_request`.
-4. **Test each route** (static, upload, CGI, error).
-
----
-
-## **Would you like:**
-
-- A concrete code example for the `handle_request` function and how to call your modules?
-- Or, a checklist of what to implement in each module?
-
-**Let me know your preference, and I’ll guide you with code and integration details!**
-
----
-
-Ran tool
-Read file: src/serverConfig.rs
-Read file: src/cgi.rs
-Read file: src/static_file.rs
-Read file: src/upload_handler.rs
-Read file: src/main.rs
-Here’s how to **connect all your components** for a fully working HTTP server, using your current code and modules. This will give you a single-threaded, non-blocking, epoll-based HTTP/1.1 server that supports static files, uploads, CGI, and error handling.
+| Feature                        | Status         | File(s)                |
+|---------------------------------|---------------|------------------------|
+| Multi-port server               | Working       | main.rs, serverConfig  |
+| Non-blocking I/O (epoll)        | Working       | main.rs                |
+| Static file serving             | Working       | static_file.rs         |
+| File upload (multipart)         | Implemented   | upload_handler.rs      |
+| CGI (Python)                    | Implemented   | cgi.rs, py.py          |
+| Config parsing                  | Working       | serverConfig.rs, config.json |
+| Routing by config               | Not integrated| main.rs, serverConfig  |
+| Error pages                     | Not integrated| main.rs, config.json   |
+| HTTP/1.1 full compliance        | Partial       | requests.rs            |
+| Timeout handling                | Not implemented| main.rs               |
+| Cookies/sessions                | Not implemented| (to do)               |
+| Directory listing/redirection   | Not implemented| (to do)               |
+| Chunked encoding                | Not implemented| (to do)               |
 
 ---
 
-## **1. Centralize Request Handling**
+## **What to Do Next**
 
-**Create a function** (e.g., `handle_request`) that:
-
-- Parses the HTTP request (method, path, headers, body).
-- Uses the config to route the request.
-- Calls the correct handler: static file, upload, CGI, or error.
-- Returns a full HTTP response as bytes.
-
----
-
-## **2. Integrate All Modules in the Event Loop**
-
-**In your event loop** (`run_mio_server`), after reading a full request, call `handle_request` and set `conn.write_buffer` to its result.
+1. **Integrate the request parser and response builder** from `requests.rs` into the event loop in `main.rs`.
+2. **Implement a central `handle_request` function** that uses config to route requests and calls the correct handler.
+3. **Expand HTTP parsing and response logic** for all required features.
+4. **Wire up error handling, timeouts, and session/cookie management.**
+5. **Test each feature and error case.**
 
 ---
 
-## **3. Example Integration Plan**
+**If you want, I can provide:**
 
-### **A. Add a Request Parser**
+- A concrete code example for integrating the request parser and router.
+- A checklist for each module’s integration.
+- Guidance on any specific feature (e.g., cookies, chunked encoding, etc.).
 
-You need to parse:
-
-- Method (GET, POST, DELETE)
-- Path
-- Headers (Content-Type, Cookie, etc.)
-- Body (for POST)
-
-You can write a simple parser or use a struct like:
-
-```rust
-struct HttpRequest {
-    method: String,
-    path: String,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
-}
-```
-
-### **B. Implement `handle_request`**
-
-This function will:
-
-- Use the config to find the matching route.
-- Check allowed methods.
-- If static file: call `read_static_file` and `build_http_response`.
-- If upload: call `handle_file_upload` and `build_upload_response`.
-- If CGI: call `run_cgi_script`.
-- If error: return the correct error page (from config).
-
-### **C. Update the Event Loop**
-
-Replace your current logic in `run_mio_server` that just serves static files with a call to `handle_request`.
-
----
-
-## **4. Example: `handle_request` Skeleton**
-
-```rust
-fn handle_request(
-    request: &HttpRequest,
-    config: &ServerConfig,
-) -> Vec<u8> {
-    // 1. Find matching route in config
-    let route = config.router.iter().find(|r| request.path.starts_with(&r.path));
-    if let Some(route) = route {
-        // 2. Check allowed methods
-        if !route.methods.contains(&request.method) {
-            return build_error_response(405, config);
-        }
-        // 3. CGI
-        if let Some((ext, cgi_path)) = &route.cgi {
-            if request.path.ends_with(ext) {
-                // Run CGI
-                let cgi_result = run_cgi_script(
-                    cgi_path,
-                    std::str::from_utf8(&request.body).unwrap_or(""),
-                    &request.path,
-                );
-                return match cgi_result {
-                    Ok(output) => build_cgi_response(output),
-                    Err(_) => build_error_response(500, config),
-                };
-            }
-        }
-        // 4. Upload
-        if request.method == "POST" && request.headers.get("content-type").map(|v| v.starts_with("multipart/form-data")).unwrap_or(false) {
-            let upload_result = handle_file_upload(&request.body, request.headers.get("content-type").unwrap());
-            return build_upload_response(upload_result);
-        }
-        // 5. Static file
-        let file_response = read_static_file(&request.path);
-        return build_http_response(file_response);
-    }
-    // 6. No route matched
-    build_error_response(404, config)
-}
-```
-
----
-
-## **5. Update the Event Loop**
-
-Replace this part in `run_mio_server`:
-
-```rust
-let request = String::from_utf8_lossy(&conn.read_buffer[..pos]);
-let path = request
-    .lines()
-    .next()
-    .and_then(|line| line.split_whitespace().nth(1))
-    .unwrap_or("/");
-
-let file = if path == "/" {
-    handle_path("def")
-} else {
-    handle_path(path.trim_start_matches('/'))
-};
-
-conn.write_buffer = match file {
-    Ok(content) => format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
-        content.len(),
-        content
-    ).into_bytes(),
-    Err(_) => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec(),
-};
-```
-
-**With:**
-
-```rust
-let http_request = parse_http_request(&conn.read_buffer);
-conn.write_buffer = handle_request(&http_request, &server_config);
-```
-
----
-
-## **6. Error Handling**
-
-Use your config’s `error_msg` to serve custom error pages for 400, 403, 404, 405, 413, 500.
-
----
-
-## **7. Next Steps**
-
-1. **Write a simple HTTP request parser** (method, path, headers, body).
-2. **Implement `handle_request`** as above, calling your modules.
-3. **Replace the static file logic in your event loop** with a call to `handle_request`.
-4. **Test each feature** (static, upload, CGI, error).
-
----
-
-## **Would you like:**
-
-- A ready-to-paste code for the request parser and integration?
-- Or, a step-by-step guide for each part?
-
-**Let me know your preference, and I’ll provide the code or detailed steps!**
-
----
-
-This error:
-
-```
-thread 'main' panicked at src/main.rs:145:52:
-file don't exist: Os { code: 2, kind: NotFound, message: "No such file or directory" }
-```
-
-means that your code tried to open `./config.json` but couldn't find it **relative to the current working directory**.
-
-### Why does this happen?
-
-- Your code runs:  
-
-  ```rust
-  let file = fs::read_to_string("./config.json").expect("file don't exist");
-  ```
-
-- The working directory (as printed) is:  
-
-  ```
-  wd /Users/adam-07-01/Desktop/LH
-  ```
-
-- But your `config.json` is actually in `src/config.json`, **not** in the project root.
-
-### Solution
-
-You have two options:
-
-#### **Option 1: Move the file**
-
-Move `config.json` from `src/` to the project root (`/Users/adam-07-01/Desktop/LH/config.json`).
-
-#### **Option 2: Change the path in your code**
-
-Change:
-
-```rust
-let file = fs::read_to_string("./config.json").expect("file don't exist");
-```
-
-to:
-
-```rust
-let file = fs::read_to_string("./src/config.json").expect("file don't exist");
-```
-
----
-
-**Recommendation:**  
-For a config file, it's best to keep it in the project root, so move it up one directory.
-
----
-
-### **Summary Table**
-
-| Current Location         | Code Path Needed         |
-|-------------------------|-------------------------|
-| `/Users/adam-07-01/Desktop/LH/config.json` | `"./config.json"`         |
-| `/Users/adam-07-01/Desktop/LH/src/config.json` | `"./src/config.json"`    |
-
----
-
-**Fix this and your error will be resolved!**
+Let me know how you’d like to proceed!
