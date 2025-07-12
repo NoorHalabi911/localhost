@@ -71,23 +71,23 @@ pub fn build_http_response(file_response: FileResponse) -> Vec<u8> {
             response
         }
         FileResponse::NotFound => {
-            let body = b"<h1>404 Not Found</h1>";
+            let body = b"<h1>404 Not Found</h1>".to_vec();
             let headers = format!(
                 "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             );
             let mut response = headers.into_bytes();
-            response.extend_from_slice(body);
+            response.extend_from_slice(&body);
             response
         }
         FileResponse::Forbidden => {
-            let body = b"<h1>403 Forbidden</h1>";
+            let body = b"<h1>403 Forbidden</h1>".to_vec();
             let headers = format!(
                 "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             );
             let mut response = headers.into_bytes();
-            response.extend_from_slice(body);
+            response.extend_from_slice(&body);
             response
         }
         FileResponse::DirectoryListing(html) => {

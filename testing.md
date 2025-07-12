@@ -4,7 +4,7 @@
 - **How:**  
   - `curl http://localhost:8080/`  
   - `curl http://localhost:9090/`  
-  - Both should respond.
+  - Both should respond. --> ⚠️ i receive at the end `</htm` the response is trauncted
 
 ---
 
@@ -20,12 +20,12 @@
 ## **3. GET, POST, DELETE Methods**
 
 - **GET:**  
-  - `curl http://localhost:8080/file.txt` ✅TESTED
+  - `curl http://localhost:8080/file.txt` ✅TESTED (file shall be in public dir)
 - **POST (upload):**  
-  - `curl -X POST -F 'file=@file.txt' http://localhost:8080/upload` ✅TESTED
+  - `curl -X POST -F 'file=@file.txt' http://localhost:8080/upload` ✅TESTED (file shall be in root dir) (also response is trauncted)
   - `curl.exe -v -X POST -F "file=@file.txt" http://localhost:8080/upload` for a detailed curl
 - **DELETE:**  
-  - `curl -X DELETE http://localhost:8080/file.txt` ✅TESTED
+  - `curl -X DELETE http://localhost:8080/file.txt` ✅TESTED ( deleted from public dir)
   - File should be deleted.
 
 ---
@@ -34,7 +34,7 @@
 
 - **Test:** Upload a file and check it appears in the upload directory.
 - **How:**  
-  - `curl -F 'file=@test.txt' http://localhost:8080/upload`
+  - `curl -F 'file=@test.txt' http://localhost:8080/upload` ✅TESTED
   - Check the upload directory for `test.txt`.
 
 ---
@@ -43,19 +43,28 @@
 
 - **Test:**  
   - `curl -i http://localhost:8080/`  
-  - Look for `Set-Cookie: session_id=...` in the response.
+  - Look for `Set-Cookie: session_id=...` in the response. ✅TESTED
   - Reuse the cookie in a second request:
-    - `curl -b 'session_id=...' http://localhost:8080/`
-  - Should reuse the same session.
+    - `curl -b 'session_id=lBlr0RRSEIjYwsNkl5ree6VpE5MyaBGv' http://localhost:8080/`
+  - Should reuse the same session. ✅TESTED (✅ Reusing existing session: lBlr0RRSEIjYwsNkl5ree6VpE5MyaBGv)
 
 ---
 
 ## **6. Custom Error Pages**
 
 - **Test:**  
-  - Request a non-existent file: `curl -i http://localhost:8080/doesnotexist`
+  - Request a non-existent file: `curl -i http://localhost:8080/doesnotexist` ✅TESTED
   - Should return your custom 404 page.
-  - Try forbidden access, method not allowed, etc., and check for custom error pages.
+  - Try forbidden access
+  - method not allowed `curl -X PUT -i http://localhost:8080/` ✅TESTED
+  - 400 Bad Request: `$ curl.exe -X POST -H "Content-Type: multipart/form-data" http://localhost:8080/upload` ✅TESTED
+  - 403 rbidden: change file-listing:false & public dir no index.html - Try to access the file outside the allowed directory `curl http://localhost:8080/` ✅TESTED
+  - 413 Payload Too Large:# Create a large file and try to upload it ✅TESTED
+
+```bash
+dd if=/dev/zero of=large_file.txt bs=1M count=10
+curl -X POST -F "file=@large_file.txt" http://localhost:8080/upload
+```
 
 ---
 
@@ -63,12 +72,12 @@
 
 - **Test:**  
   - Remove `index.html` from a directory with `directory_listing: true`.
-  - `curl http://localhost:8080/` should show an HTML file list.
+  - `curl http://localhost:8080/` should show an HTML file list. ✅TESTED
   - Add `index.html` back; it should be served instead.
 
 ---
 
-## **8. Redirections**
+## **8. Redirections** ✅TESTED
 
 - **Test:**  
   - Add a route in config with `"redirection": { "target": "/new", "status": 301 }`.
@@ -80,30 +89,30 @@
 
 - **Test:**  
   - Add a route with a CGI extension (e.g., `.py`).
-  - `curl http://localhost:8080/script.py`
+  - `curl http://localhost:8080/cgi-bin/py.py` ✅TESTED
   - Should execute the script and return its output.
-  - Check that `PATH_INFO` is set correctly in the script output.
+  - Check that `PATH_INFO` is set correctly in the script output. ✅TESTED (body is not printed idk if this is ok)
 
 ---
 
-## **10. Timeouts**
+## **10. Timeouts** ✅TESTED
 
 - **Test:**  
-  - Open a connection (e.g., with `telnet localhost 8080`), send part of a request, and wait >10 seconds.
+  - Open a connection (e.g., with `ncat localhost 8080`), send part of a request, and wait >30 seconds.
   - The server should close the connection.
 
 ---
 
-## **11. Chunked Transfer Encoding**
+## **11. Chunked Transfer Encoding** ✅TESTED
 
 - **Test:**  
   - Use a tool like `curl` to upload with chunked encoding:
-    - `curl -T test.txt -H "Transfer-Encoding: chunked" http://localhost:8080/upload`
+    - `curl -X POST -F "file=@file.txt" -H "Transfer-Encoding: chunked" http://localhost:8080/upload`
   - The upload should succeed.
 
 ---
 
-## **12. Status Codes**
+## **12. Status Codes** ✅TESTED
 
 - **Test:**  
   - For each error and success case, check the HTTP status code in the response (`curl -i ...`).

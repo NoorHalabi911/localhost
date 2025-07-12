@@ -189,8 +189,10 @@ fn handle_request(
         if let Some((ext, script)) = &route.cgi {
             if req.path.ends_with(ext) {
                 let path_info = &req.path;
+                // Construct the full path to the script
+                let script_path = format!("{}/{}", route.root, script);
                 match run_cgi_script(
-                    script,
+                    &script_path,
                     std::str::from_utf8(&req.body).unwrap_or(""),
                     path_info,
                 ) {
@@ -500,13 +502,22 @@ pub fn run_mio_server(
                     Ok(n) => {
                         conn.read_buffer.extend_from_slice(&temp_buf[..n]);
                         conn.last_active = Instant::now();
-                        println!("DEBUG: Received {} bytes from client {:?}, total buffer: {} bytes", n, token, conn.read_buffer.len());
-                        
+                        println!(
+                            "DEBUG: Received {} bytes from client {:?}, total buffer: {} bytes",
+                            n,
+                            token,
+                            conn.read_buffer.len()
+                        );
+
                         // Debug: Show the first 200 bytes of what we received
                         let debug_len = conn.read_buffer.len().min(200);
                         let debug_data = &conn.read_buffer[..debug_len];
-                        println!("DEBUG: First {} bytes received: {:?}", debug_len, String::from_utf8_lossy(debug_data));
-                        
+                        println!(
+                            "DEBUG: First {} bytes received: {:?}",
+                            debug_len,
+                            String::from_utf8_lossy(debug_data)
+                        );
+
                         // Try to process the request with whatever data we have
                         if let Some(header_end) =
                             conn.read_buffer.windows(4).position(|w| w == b"\r\n\r\n")
@@ -515,23 +526,56 @@ pub fn run_mio_server(
                             // Try to parse Content-Length
                             let headers_str = String::from_utf8_lossy(headers);
                             println!("DEBUG: Headers received:\n{}", headers_str);
-                            
-                            let content_length = headers_str
-                                .lines()
-                                .find(|line| {
-                                    line.to_ascii_lowercase().starts_with("content-length:")
-                                })
-                                .and_then(|line| line.split(':').nth(1))
-                                .and_then(|v| v.trim().parse::<usize>().ok())
-                                .unwrap_or(0);
 
-                            let total_len = header_end + 4 + content_length;
-                            println!("DEBUG: Header end: {}, Content-Length: {}, Total needed: {}, Buffer size: {}", 
-                                    header_end, content_length, total_len, conn.read_buffer.len());
-                            
+                            // Check if this is a chunked transfer encoding request
+                            let is_chunked = headers_str.lines().any(|line| {
+                                line.to_ascii_lowercase()
+                                    .starts_with("transfer-encoding: chunked")
+                            });
+
+                            let content_length = if is_chunked {
+                                0 // For chunked requests, we'll determine length differently
+                            } else {
+                                headers_str
+                                    .lines()
+                                    .find(|line| {
+                                        line.to_ascii_lowercase().starts_with("content-length:")
+                                    })
+                                    .and_then(|line| line.split(':').nth(1))
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                                    .unwrap_or(0)
+                            };
+
+                            let total_len = if is_chunked {
+                                // For chunked requests, we need to find the end of the chunked body
+                                // Look for the final "0\r\n\r\n" that marks the end of chunked data
+                                if let Some(chunked_end) =
+                                    find_chunked_body_end(&conn.read_buffer[header_end + 4..])
+                                {
+                                    header_end + 4 + chunked_end
+                                } else {
+                                    // Haven't received the complete chunked body yet
+                                    conn.read_buffer.len() + 1 // Force waiting for more data
+                                }
+                            } else {
+                                header_end + 4 + content_length
+                            };
+
+                            println!(
+                                "DEBUG: Header end: {}, Content-Length: {}, Is chunked: {}, Total needed: {}, Buffer size: {}",
+                                header_end,
+                                content_length,
+                                is_chunked,
+                                total_len,
+                                conn.read_buffer.len()
+                            );
+
                             // Only process if we have the complete request
                             if conn.read_buffer.len() >= total_len {
-                                println!("DEBUG: Processing complete request with {} bytes", total_len);
+                                println!(
+                                    "DEBUG: Processing complete request with {} bytes",
+                                    total_len
+                                );
                                 let response = handle_request(
                                     &conn.read_buffer[..total_len],
                                     session_manager,
@@ -546,7 +590,10 @@ pub fn run_mio_server(
                                     Interest::WRITABLE,
                                 )?;
                             } else {
-                                println!("DEBUG: Waiting for more data... Need {} more bytes", total_len - conn.read_buffer.len());
+                                println!(
+                                    "DEBUG: Waiting for more data... Need {} more bytes",
+                                    total_len - conn.read_buffer.len()
+                                );
                                 // Keep listening for more readable events
                                 poll.registry().reregister(
                                     &mut conn.stream,
@@ -591,8 +638,12 @@ pub fn run_mio_server(
             .collect();
         for token in timed_out {
             if let Some(mut conn) = clients.remove(&token) {
-                println!("DEBUG: Client {:?} timed out after {} seconds (buffer size: {} bytes)", 
-                        token, now.duration_since(conn.last_active).as_secs(), conn.read_buffer.len());
+                println!(
+                    "DEBUG: Client {:?} timed out after {} seconds (buffer size: {} bytes)",
+                    token,
+                    now.duration_since(conn.last_active).as_secs(),
+                    conn.read_buffer.len()
+                );
                 let _ = conn.stream.shutdown(std::net::Shutdown::Both);
                 poll.registry().deregister(&mut conn.stream).ok();
             }
@@ -606,4 +657,39 @@ fn handle_path(path: &str) -> io::Result<String> {
     let html_path = wd.join("html").join(file_name);
     println!("html path {}", html_path.display());
     fs::read_to_string(html_path)
+}
+
+// Helper function to find the end of a chunked transfer encoding body
+fn find_chunked_body_end(body: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    while i < body.len() {
+        // Find the next CRLF
+        let crlf = match body[i..].windows(2).position(|w| w == b"\r\n") {
+            Some(pos) => i + pos,
+            None => return None, // No CRLF found, incomplete chunk
+        };
+
+        let len_str = match std::str::from_utf8(&body[i..crlf]) {
+            Ok(s) => s,
+            Err(_) => return None, // Invalid UTF-8 in chunk size
+        };
+
+        let chunk_size = match usize::from_str_radix(len_str.trim(), 16) {
+            Ok(size) => size,
+            Err(_) => return None, // Invalid chunk size
+        };
+
+        if chunk_size == 0 {
+            // Found the final "0\r\n\r\n" chunk
+            return Some(i + 5); // Include the final CRLF
+        }
+
+        i = crlf + 2; // Skip CRLF
+        if i + chunk_size > body.len() {
+            return None; // Chunk size exceeds remaining data
+        }
+
+        i += chunk_size + 2; // Skip chunk data and trailing CRLF
+    }
+    None // Haven't found the end yet
 }

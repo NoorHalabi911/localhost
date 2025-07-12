@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-
+use crate::upload_handler::decode_chunked_body;
 #[derive(Debug)]
 pub struct Request {
     pub method: String,
@@ -18,9 +18,13 @@ pub struct Response {
 }
 
 pub fn parse_http_request(raw: &[u8]) -> Option<Request> {
+    println!("DEBUG: parse_http_request called with {} bytes", raw.len());
+    
     // Find the end of headers (double CRLF)
     let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
     let header_end = header_end + 4; // Include the CRLF
+    
+    println!("DEBUG: Header end at position: {}", header_end);
     
     // Parse headers as string
     let header_str = std::str::from_utf8(&raw[..header_end]).ok()?;
@@ -43,8 +47,22 @@ pub fn parse_http_request(raw: &[u8]) -> Option<Request> {
     }
 
     // Get the body as raw bytes
-    let body = raw[header_end..].to_vec();
+    let mut body = raw[header_end..].to_vec();
+    println!("DEBUG: Raw body length: {}", body.len());
+    
+    // Handle chunked transfer encoding
+    if headers.get("Transfer-Encoding").map(|s| s.to_lowercase()) == Some("chunked".to_string()) {
+        println!("DEBUG: Detected chunked transfer encoding, decoding body...");
+        // Decode chunked body
+        if let Ok(decoded) = decode_chunked_body(&body) {
+            println!("DEBUG: Successfully decoded chunked body, new length: {}", decoded.len());
+            body = decoded;
+        } else {
+            println!("DEBUG: Failed to decode chunked body");
+        }
+    }
 
+    println!("DEBUG: Final body length: {}", body.len());
     Some(Request {
         method,
         path,

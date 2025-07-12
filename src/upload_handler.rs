@@ -123,47 +123,47 @@ pub fn build_upload_response(result: UploadResult) -> Vec<u8> {
                 body.len()
             );
             let mut response = headers.into_bytes();
-            response.extend_from_slice(body);
+            response.extend_from_slice(&body);
             response
         }
         UploadResult::PayloadTooLarge => {
             println!("DEBUG: Returning PayloadTooLarge response");
-            let body = b"<h1>413 Payload Too Large</h1>";
+            let body = b"<h1>413 Payload Too Large</h1>".to_vec();
             let headers = format!(
                 "HTTP/1.1 413 Payload Too Large\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             );
             let mut response = headers.into_bytes();
-            response.extend_from_slice(body);
+            response.extend_from_slice(&body);
             response
         }
         UploadResult::BadRequest => {
             println!("DEBUG: Returning BadRequest response");
-            let body = b"<h1>400 Bad Request</h1>";
+            let body = b"<h1>400 Bad Request</h1>".to_vec();
             let headers = format!(
                 "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             );
             let mut response = headers.into_bytes();
-            response.extend_from_slice(body);
+            response.extend_from_slice(&body);
             response
         }
         UploadResult::InternalError => {
             println!("DEBUG: Returning InternalError response");
-            let body = b"<h1>500 Internal Server Error</h1>";
+            let body = b"<h1>500 Internal Server Error</h1>".to_vec();
             let headers = format!(
                 "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             );
             let mut response = headers.into_bytes();
-            response.extend_from_slice(body);
+            response.extend_from_slice(&body);
             response
         }
     }
 }
 
 // Helper to decode chunked transfer encoding
-fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, ()> {
+pub fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, ()> {
     let mut decoded = Vec::new();
     let mut i = 0;
     while i < body.len() {

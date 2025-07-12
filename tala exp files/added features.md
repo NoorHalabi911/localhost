@@ -777,3 +777,68 @@ Now you should see:
 The key fix was that after the first read (headers), the server now **re-registers for readable events** instead of just waiting. This ensures the event loop will trigger again when the body data arrives.
 
 Let me know what happens!
+
+---
+Looking at the debug output, I can see the issue clearly now. The problem is that the chunked transfer encoding is being detected, but the body is empty (0 bytes) when it reaches the upload handler. This suggests that the chunked data is not being properly read from the socket.
+
+Let me examine the current request parsing code to understand how chunked transfer encoding is being handled:
+
+Read file: src/requests.rs
+Now let me check the main server code to see how the request reading is handled:
+
+Read file: src/main.rs
+Let me continue reading the main server code to see how the request reading loop works:
+
+Read file: src/main.rs
+Now I can see the issue! The problem is in the request reading logic in `main.rs`. The server is only processing requests when it has the complete request based on `Content-Length`, but for chunked transfer encoding, there is no `Content-Length` header, so `content_length` defaults to 0.
+
+Looking at the debug output:
+
+- The server receives 409 bytes initially
+- It finds headers ending at position 198
+- Content-Length is 0 (because it's chunked)
+- Total needed becomes 198 + 0 = 198
+- The server processes only the first 198 bytes (headers only)
+- The chunked body data (the remaining 211 bytes) is never processed
+
+The server needs to handle chunked transfer encoding differently. For chunked requests, it should continue reading until it receives the complete chunked body (ending with a "0\r\n\r\n").
+
+Let me fix this by modifying the request reading logic:
+
+Now I need to add the helper function `find_chunked_body_end` to detect when a chunked body is complete:
+
+Now let's test the fix by running the server and trying the chunked upload again:
+
+```bash
+cargo run
+```
+
+Let me wait a moment for the server to start and then test the chunked upload:
+
+```bash
+curl -X POST -F "file=@file.txt" -H "Transfer-Encoding: chunked" http://localhost:8080/upload
+```
+
+It seems PowerShell is interpreting the curl command differently. Let me try a different approach:
+
+```bash
+curl.exe -X POST -F "file=@file.txt" -H "Transfer-Encoding: chunked" http://localhost:8080/upload
+```
+
+The server is still returning a 400 Bad Request. Let me check if the server is running and look at the debug output. Let me first check if the server is running:
+
+```bash
+netstat -an | findstr :8080
+```
+
+The server is running. Let me check the server output to see what's happening. Let me stop the current server and restart it to see the debug output:
+
+```bash
+taskkill /F /IM cargo.exe
+```
+
+Now let me start the server again and see the debug output:
+
+```bash
+cargo run
+```
