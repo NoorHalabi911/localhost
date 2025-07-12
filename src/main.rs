@@ -9,10 +9,10 @@ use std::io;
 use std::io::{Read, Write};
 // use std::os::unix::io::{AsRawFd, RawFd};
 use mio::net::{TcpListener, TcpStream};
-use std::{fs, time::Duration};
+use requests::{Request, Response, build_response, parse_http_request};
 use std::time::Instant;
+use std::{fs, time::Duration};
 use upload_handler::{UploadResult, build_upload_response, handle_file_upload};
-use requests::{parse_http_request, build_response, Request, Response};
 mod session_manager;
 use session_manager::SessionManager;
 
@@ -23,7 +23,7 @@ mod serverConfig;
 mod static_file;
 mod upload_handler;
 
-const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(30); // Increased from 10 to 30 seconds
 
 fn main() {
     let servers = json_parser();
@@ -96,7 +96,7 @@ fn listener_socket(
 
 // Centralized request handler
 fn handle_request(
-    raw_request: &str,
+    raw_request: &[u8],
     session_manager: &mut SessionManager,
     server_config: &ServerConfig,
 ) -> Vec<u8> {
@@ -134,8 +134,19 @@ fn handle_request(
         set_cookie_header = Some(format!("session_id={}; Path=/; HttpOnly", session.id));
     }
     // Routing: find matching route
-    let route = server_config.router.iter().find(|r| req.path.starts_with(&r.path));
+    println!("DEBUG: Request path: '{}'", req.path);
+    println!("DEBUG: Request method: '{}'", req.method);
+    let route = server_config.router.iter().max_by_key(|r| {
+        if req.path.starts_with(&r.path) {
+            r.path.len()
+        } else {
+            0
+        }
+    });
     if let Some(route) = route {
+        println!("DEBUG: Matched route path: '{}'", route.path);
+        println!("DEBUG: Route methods: {:?}", route.methods);
+
         // Redirection support
         if let Some(redir) = &route.redirection {
             let status = redir.status.unwrap_or(302);
@@ -178,7 +189,11 @@ fn handle_request(
         if let Some((ext, script)) = &route.cgi {
             if req.path.ends_with(ext) {
                 let path_info = &req.path;
-                match run_cgi_script(script, std::str::from_utf8(&req.body).unwrap_or(""), path_info) {
+                match run_cgi_script(
+                    script,
+                    std::str::from_utf8(&req.body).unwrap_or(""),
+                    path_info,
+                ) {
                     Ok(output) => {
                         let mut headers = HashMap::new();
                         headers.insert("Content-Type".to_string(), "text/plain".to_string());
@@ -212,7 +227,12 @@ fn handle_request(
         }
         // Upload handler
         if req.method == "POST" && route.path == "/upload" {
-            let content_type = req.headers.get("Content-Type").map(|s| s.as_str()).unwrap_or("");
+            println!("DEBUG: Upload handler condition met!");
+            let content_type = req
+                .headers
+                .get("Content-Type")
+                .map(|s| s.as_str())
+                .unwrap_or("");
             let result = handle_file_upload(&req.body, content_type);
             let mut response = build_upload_response(result);
             if let Some(cookie) = set_cookie_header {
@@ -223,6 +243,11 @@ fn handle_request(
                 return resp_str.into_bytes();
             }
             return response;
+        } else {
+            println!(
+                "DEBUG: Upload handler condition NOT met. req.method='{}', route.path='{}'",
+                req.method, route.path
+            );
         }
         // DELETE handler
         if req.method == "DELETE" {
@@ -346,7 +371,9 @@ fn handle_request(
             route.directory_listing.unwrap_or(false),
         );
         let mut response = match &file_response {
-            FileResponse::Ok(_) | FileResponse::DirectoryListing(_) => build_http_response(file_response),
+            FileResponse::Ok(_) | FileResponse::DirectoryListing(_) => {
+                build_http_response(file_response)
+            }
             FileResponse::NotFound => {
                 let body = custom_error_body(404, server_config)
                     .unwrap_or_else(|| b"<h1>404 Not Found</h1>".to_vec());
@@ -363,7 +390,7 @@ fn handle_request(
                     },
                     body,
                 })
-            },
+            }
             FileResponse::Forbidden => {
                 let body = custom_error_body(403, server_config)
                     .unwrap_or_else(|| b"<h1>403 Forbidden</h1>".to_vec());
@@ -380,7 +407,7 @@ fn handle_request(
                     },
                     body,
                 })
-            },
+            }
         };
         if let Some(cookie) = set_cookie_header {
             // Insert Set-Cookie header if needed
@@ -397,8 +424,8 @@ fn handle_request(
     if let Some(cookie) = set_cookie_header {
         headers.insert("Set-Cookie".to_string(), cookie);
     }
-    let body = custom_error_body(404, server_config)
-        .unwrap_or_else(|| b"<h1>404 Not Found</h1>".to_vec());
+    let body =
+        custom_error_body(404, server_config).unwrap_or_else(|| b"<h1>404 Not Found</h1>".to_vec());
     build_response(Response {
         status_code: 404,
         reason_phrase: "Not Found".to_string(),
@@ -463,7 +490,8 @@ pub fn run_mio_server(
                 continue;
             }
             if let Some(conn) = clients.get_mut(&token) {
-                let mut temp_buf = [0; 2048];
+                println!("DEBUG: Handling read event for client {:?}", token);
+                let mut temp_buf = [0; 10000];
                 match conn.stream.read(&mut temp_buf) {
                     Ok(0) => {
                         clients.remove(&token);
@@ -472,18 +500,60 @@ pub fn run_mio_server(
                     Ok(n) => {
                         conn.read_buffer.extend_from_slice(&temp_buf[..n]);
                         conn.last_active = Instant::now();
-                        if let Some(pos) = conn.read_buffer.windows(4).position(|w| w == b"\r\n\r\n") {
-                            let request = String::from_utf8_lossy(&conn.read_buffer[..]);
-                            // Use the centralized handler
-                            let response = handle_request(&request, session_manager, server_config);
-                            conn.write_buffer = response;
-                            conn.is_writing = true;
-                            conn.read_buffer.clear();
-                            poll.registry().reregister(
-                                &mut conn.stream,
-                                token,
-                                Interest::WRITABLE,
-                            )?;
+                        println!("DEBUG: Received {} bytes from client {:?}, total buffer: {} bytes", n, token, conn.read_buffer.len());
+                        
+                        // Debug: Show the first 200 bytes of what we received
+                        let debug_len = conn.read_buffer.len().min(200);
+                        let debug_data = &conn.read_buffer[..debug_len];
+                        println!("DEBUG: First {} bytes received: {:?}", debug_len, String::from_utf8_lossy(debug_data));
+                        
+                        // Try to process the request with whatever data we have
+                        if let Some(header_end) =
+                            conn.read_buffer.windows(4).position(|w| w == b"\r\n\r\n")
+                        {
+                            let headers = &conn.read_buffer[..header_end + 4];
+                            // Try to parse Content-Length
+                            let headers_str = String::from_utf8_lossy(headers);
+                            println!("DEBUG: Headers received:\n{}", headers_str);
+                            
+                            let content_length = headers_str
+                                .lines()
+                                .find(|line| {
+                                    line.to_ascii_lowercase().starts_with("content-length:")
+                                })
+                                .and_then(|line| line.split(':').nth(1))
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+
+                            let total_len = header_end + 4 + content_length;
+                            println!("DEBUG: Header end: {}, Content-Length: {}, Total needed: {}, Buffer size: {}", 
+                                    header_end, content_length, total_len, conn.read_buffer.len());
+                            
+                            // Only process if we have the complete request
+                            if conn.read_buffer.len() >= total_len {
+                                println!("DEBUG: Processing complete request with {} bytes", total_len);
+                                let response = handle_request(
+                                    &conn.read_buffer[..total_len],
+                                    session_manager,
+                                    server_config,
+                                );
+                                conn.write_buffer = response;
+                                conn.is_writing = true;
+                                conn.read_buffer.drain(..total_len);
+                                poll.registry().reregister(
+                                    &mut conn.stream,
+                                    token,
+                                    Interest::WRITABLE,
+                                )?;
+                            } else {
+                                println!("DEBUG: Waiting for more data... Need {} more bytes", total_len - conn.read_buffer.len());
+                                // Keep listening for more readable events
+                                poll.registry().reregister(
+                                    &mut conn.stream,
+                                    token,
+                                    Interest::READABLE,
+                                )?;
+                            }
                         }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -514,13 +584,15 @@ pub fn run_mio_server(
         }
         // Timeout check: remove clients that have been idle for too long
         let now = Instant::now();
-        let timed_out: Vec<Token> = clients.iter()
+        let timed_out: Vec<Token> = clients
+            .iter()
             .filter(|(_, conn)| now.duration_since(conn.last_active) > CLIENT_TIMEOUT)
             .map(|(token, _)| *token)
             .collect();
         for token in timed_out {
             if let Some(mut conn) = clients.remove(&token) {
-                println!("Client {:?} timed out and was disconnected", token);
+                println!("DEBUG: Client {:?} timed out after {} seconds (buffer size: {} bytes)", 
+                        token, now.duration_since(conn.last_active).as_secs(), conn.read_buffer.len());
                 let _ = conn.stream.shutdown(std::net::Shutdown::Both);
                 poll.registry().deregister(&mut conn.stream).ok();
             }
@@ -535,4 +607,3 @@ fn handle_path(path: &str) -> io::Result<String> {
     println!("html path {}", html_path.display());
     fs::read_to_string(html_path)
 }
-

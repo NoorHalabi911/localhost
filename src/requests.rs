@@ -17,8 +17,14 @@ pub struct Response {
     pub body: Vec<u8>,
 }
 
-pub fn parse_http_request(raw: &str) -> Option<Request> {
-    let mut lines = raw.split("\r\n");
+pub fn parse_http_request(raw: &[u8]) -> Option<Request> {
+    // Find the end of headers (double CRLF)
+    let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let header_end = header_end + 4; // Include the CRLF
+    
+    // Parse headers as string
+    let header_str = std::str::from_utf8(&raw[..header_end]).ok()?;
+    let mut lines = header_str.split("\r\n");
     let request_line = lines.next()?; // e.g. GET /index.html HTTP/1.1
 
     let mut parts = request_line.split_whitespace();
@@ -36,8 +42,8 @@ pub fn parse_http_request(raw: &str) -> Option<Request> {
         }
     }
 
-    // Join remaining lines as body (if any)
-    let body = lines.collect::<Vec<&str>>().join("\r\n").into_bytes();
+    // Get the body as raw bytes
+    let body = raw[header_end..].to_vec();
 
     Some(Request {
         method,
