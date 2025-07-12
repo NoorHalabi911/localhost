@@ -581,14 +581,14 @@ pub fn run_mio_server(
                                     session_manager,
                                     server_config,
                                 );
-                                conn.write_buffer = response;
-                                conn.is_writing = true;
+                            conn.write_buffer = response;
+                            conn.is_writing = true;
                                 conn.read_buffer.drain(..total_len);
-                                poll.registry().reregister(
-                                    &mut conn.stream,
-                                    token,
-                                    Interest::WRITABLE,
-                                )?;
+                            poll.registry().reregister(
+                                &mut conn.stream,
+                                token,
+                                Interest::WRITABLE,
+                            )?;
                             } else {
                                 println!(
                                     "DEBUG: Waiting for more data... Need {} more bytes",
