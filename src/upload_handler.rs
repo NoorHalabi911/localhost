@@ -1,10 +1,15 @@
 // # كود التعامل مع POST ورفع الملفات
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 
 #[derive(Debug)]
+/// Result of handling a multipart/form-data upload.
+///
+/// Why: Distinguish success from specific error conditions to build proper
+/// HTTP responses.
+/// How: Returned by `handle_file_upload` and consumed by `build_upload_response`.
 pub enum UploadResult {
     Ok,
     PayloadTooLarge,
@@ -14,11 +19,17 @@ pub enum UploadResult {
 
 const MAX_UPLOAD_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
+/// Parse a multipart/form-data body and write the uploaded file into `uploads/`.
+///
+/// Why: Provide a safe, size-limited file upload endpoint.
+/// How: Validates size, extracts boundary, (optionally) decodes chunked bodies,
+/// splits parts by boundary, finds a `filename`, then writes the part bytes to
+/// `uploads/<filename>`.
 pub fn handle_file_upload(body: &[u8], content_type: &str) -> UploadResult {
     println!("DEBUG: Starting file upload handler");
     println!("DEBUG: Body length: {}", body.len());
     println!("DEBUG: Content-Type: '{}'", content_type);
-    
+
     // 1. التحقق من حجم البيانات
     if body.len() > MAX_UPLOAD_SIZE {
         println!("DEBUG: Payload too large");
@@ -29,7 +40,10 @@ pub fn handle_file_upload(body: &[u8], content_type: &str) -> UploadResult {
 
     //multipart/form-data اللي هو النوع المستخدم في رفع الملفات
     if !content_type.starts_with("multipart/form-data; boundary=") {
-        println!("DEBUG: Bad content type - expected multipart/form-data, got: '{}'", content_type);
+        println!(
+            "DEBUG: Bad content type - expected multipart/form-data, got: '{}'",
+            content_type
+        );
         return UploadResult::BadRequest;
     }
 
@@ -41,7 +55,7 @@ pub fn handle_file_upload(body: &[u8], content_type: &str) -> UploadResult {
             return UploadResult::BadRequest;
         }
     };
-    
+
     println!("DEBUG: Boundary: '{}'", boundary);
 
     // 5. تحويل الجسم إلى سلسلة
@@ -66,7 +80,10 @@ pub fn handle_file_upload(body: &[u8], content_type: &str) -> UploadResult {
     };
 
     println!("DEBUG: Body string length: {}", body_str.len());
-    println!("DEBUG: Body string starts with: '{}'", &body_str[..body_str.len().min(100)]);
+    println!(
+        "DEBUG: Body string starts with: '{}'",
+        &body_str[..body_str.len().min(100)]
+    );
 
     // 6. التحقق من وجود الجزء المطلوب
     let parts: Vec<&str> = body_str.split(&boundary).collect();
@@ -111,7 +128,10 @@ pub fn handle_file_upload(body: &[u8], content_type: &str) -> UploadResult {
     UploadResult::BadRequest
 }
 
-/// /// تنشئ رد HTTP بناءً على نتيجة رفع الملف
+/// Create an HTTP response for a given `UploadResult`.
+///
+/// Why: Centralizes status mapping and messaging for upload outcomes.
+/// How: Emits minimal HTML responses with appropriate status codes (200/400/413/500).
 pub fn build_upload_response(result: UploadResult) -> Vec<u8> {
     println!("DEBUG: Building upload response for result: {:?}", result);
     match result {
@@ -162,7 +182,11 @@ pub fn build_upload_response(result: UploadResult) -> Vec<u8> {
     }
 }
 
-// Helper to decode chunked transfer encoding
+/// Decode a chunked Transfer-Encoding body into plain bytes.
+///
+/// Why: Allow uploads sent with chunked transfer to be parsed like regular bodies.
+/// How: Iteratively reads `<hex-size>\r\n<chunk>\r\n` sequences until a
+/// zero-sized chunk is encountered.
 pub fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, ()> {
     let mut decoded = Vec::new();
     let mut i = 0;

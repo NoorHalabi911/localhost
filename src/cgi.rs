@@ -1,6 +1,11 @@
-use std::error::Error;
-use std::io::{self, ErrorKind, Write};
+// use std::error::Error;
+use std::io::{self, Write};
 use std::process::Command;
+/// Execute a Python CGI script and return its stdout as the response body.
+///
+/// Why: Provide simple server-side execution for dynamic responses.
+/// How: Spawns `python <script_path>`, sets `PATH_INFO`, writes the HTTP
+/// request body to the child's stdin, and captures stdout.
 pub fn run_cgi_script(script_path: &str, body: &str, path_info: &str) -> io::Result<String> {
     let output = Command::new("python")
         .arg(script_path)

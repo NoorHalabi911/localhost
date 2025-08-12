@@ -2,24 +2,39 @@ use rand::{Rng, distributions::Alphanumeric};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
+/// In-memory session object.
+///
+/// Why: Track per-client state via a cookie (`session_id`).
+/// How: Stores a random `id` and a key-value map for extensible data.
 pub struct Session {
     pub id: String,
     pub data: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
+/// Session manager holding all active sessions.
+///
+/// Why: Provide lookups and creation of sessions from incoming cookies.
+/// How: Map from `session_id` to `Session` in memory.
 pub struct SessionManager {
     sessions: HashMap<String, Session>,
 }
 
 impl SessionManager {
+    /// Construct an empty `SessionManager`.
+    ///
+    /// Why: Initialize session storage at server startup.
+    /// How: Creates an empty `HashMap`.
     pub fn new() -> Self {
         SessionManager {
             sessions: HashMap::new(),
         }
     }
 
-    /// gen session_id randomly
+    /// Generate a random 32-character `session_id`.
+    ///
+    /// Why: Use an unpredictable identifier for client sessions.
+    /// How: Samples alphanumeric characters from a thread-local RNG.
     fn generate_session_id() -> String {
         rand::thread_rng()
             .sample_iter(&Alphanumeric)
@@ -27,7 +42,11 @@ impl SessionManager {
             .map(char::from)
             .collect()
     }
-    /// get or create a session based on the cookie header
+    /// Get or create a session based on the `Cookie` header.
+    ///
+    /// Why: Reuse valid sessions; otherwise create a new one and return it.
+    /// How: Extracts `session_id` from cookies; looks it up in the internal map;
+    /// if missing, generates a new session and stores it.
     pub fn get_or_create_session(&mut self, cookie_header: Option<&str>) -> Session {
         if let Some(cookie_header) = cookie_header {
             if let Some(session_id) = Self::extract_session_id(cookie_header) {
@@ -56,7 +75,10 @@ impl SessionManager {
         new_session
     }
 
-    /// extract session_id from the cookie header to use in get_or_create_session
+    /// Extract `session_id` from the `Cookie` header if present.
+    ///
+    /// Why: Helpers keep `get_or_create_session` minimal and readable.
+    /// How: Splits cookies on `;` and looks for the `session_id=` prefix.
     fn extract_session_id(cookie_header: &str) -> Option<String> {
         for cookie in cookie_header.split(';') {
             let cookie = cookie.trim();

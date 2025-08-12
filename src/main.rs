@@ -1,6 +1,6 @@
 use cgi::run_cgi_script;
 use mio::{Events, Interest, Poll, Token};
-use serde::Deserialize;
+// use serde::Deserialize;
 use serverConfig::ServerConfig;
 use static_file::{FileResponse, build_http_response, read_static_file_with_listing};
 use std::collections::HashMap;
@@ -8,11 +8,11 @@ use std::env;
 use std::io;
 use std::io::{Read, Write};
 // use std::os::unix::io::{AsRawFd, RawFd};
-use mio::net::{TcpListener, TcpStream};
-use requests::{Request, Response, build_response, parse_http_request};
+use mio::net::TcpListener;
+use requests::{Response, build_response, parse_http_request};
 use std::time::Instant;
 use std::{fs, time::Duration};
-use upload_handler::{UploadResult, build_upload_response, handle_file_upload};
+use upload_handler::{build_upload_response, handle_file_upload};
 mod session_manager;
 use session_manager::SessionManager;
 
@@ -25,47 +25,44 @@ mod upload_handler;
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(30); // Increased from 10 to 30 seconds
 
+/// Entry point: loads configuration, initializes sessions, and starts listeners.
+///
+/// Why: Bootstraps the server with shared state and configured ports.
+/// How: Parses `src/config.json`, creates `SessionManager`, then starts a mio
+/// listener per configured server.
 fn main() {
     let servers = json_parser();
     let mut session_manager = SessionManager::new(); // create a new session manager
     for server in &servers {
-        listener_socket(server, &mut session_manager, server);
+        let res = listener_socket(server, &mut session_manager, server);
+        if let Err(e) = res {
+            eprintln!("Error: {}", e);
+        }
     }
 }
-// fn test_cgi()-> Result<(), Box<dyn Error>> {
-// let mut wd = env::current_dir().unwrap();
-// let python_file_path = wd.join("py.py");
-// println!("{}", python_file_path.display());
-// let body = "name=Rust";
-// let path_info = wd.to_string_lossy();
-// ///mnt/c/Users/admar/Desktop/lh/py.py
-// match run_cgi_script(python_file_path.to_str().unwrap(), body, &path_info) {
-//     Ok(output) => println!("{}", output),
-//     Err(e) => eprintln!("Error: {}", e),
-// }
-// Ok(())
-// }
 
+/// Read and deserialize `src/config.json` into a list of `ServerConfig`.
+///
+/// Why: Central source of truth for ports, routes, and error pages.
+/// How: Reads the JSON file from the current working directory and uses
+/// `serde_json` to build the config structs.
 fn json_parser() -> Vec<ServerConfig> {
-    let mut wd = env::current_dir().unwrap();
+    let wd = env::current_dir().unwrap();
     let config_path = wd.join("src/config.json");
     println!("wd {}", wd.display());
     let file = fs::read_to_string(config_path).expect("file don't exist");
     println!("fu=ile {}", file);
     let servers: Vec<ServerConfig> =
         serde_json::from_str(&file).expect("JSON was not well-formatted");
-
-    // let servers: Vec<ServerConfig> =
-    //     serde_yaml::from_str(&file).expect("yaml was not well-formatted");
-    //for printing the servers configs
-    // for server in servers {
-    //     println!("Server Name: {:#?}", server);
-    // }
-
     servers
 }
-const SERVER: Token = Token(0);
 
+/// Create `TcpListener`s for all `{ip, port}` pairs and run the mio server.
+///
+/// Why: Each server can expose multiple addresses; this sets up non-blocking
+/// listeners and hands them to the event loop.
+/// How: Binds each address, stores them in a token→listener map, and calls
+/// `run_mio_server`.
 fn listener_socket(
     server: &ServerConfig,
     session_manager: &mut SessionManager,
@@ -74,14 +71,14 @@ fn listener_socket(
     let mut listeners: HashMap<Token, TcpListener> = HashMap::new();
 
     for address in &server.server_address {
-        let mut next_token = listeners.len();
+        let next_token = listeners.len();
         let bind_address = format!("{}:{}", address.ip, address.port);
         let socket_addr: std::net::SocketAddr =
             bind_address.parse().expect("Invalid socket address");
 
         // opens a tcp socket and it become passive
         // binding is like : I want to listen for connections on this IP:PORT
-        let mut listener =
+        let listener =
             TcpListener::bind(socket_addr).expect(&format!("Failed to bind to {}", bind_address));
         println!("Listening on {}", bind_address);
 
@@ -94,7 +91,13 @@ fn listener_socket(
     run_mio_server(listeners, session_manager, server_config)
 }
 
-// Centralized request handler
+/// Centralized request handler.
+///
+/// Why: Provide one config-driven place to process any HTTP request.
+/// How: Parses the request, manages the session cookie, matches the longest
+/// route prefix, then dispatches (redirect, 405, CGI, upload, DELETE, or
+/// static file). Builds a proper HTTP response and injects `Set-Cookie` when
+/// a new session is created.
 fn handle_request(
     raw_request: &[u8],
     session_manager: &mut SessionManager,
@@ -236,7 +239,7 @@ fn handle_request(
                 .map(|s| s.as_str())
                 .unwrap_or("");
             let result = handle_file_upload(&req.body, content_type);
-            let mut response = build_upload_response(result);
+            let response = build_upload_response(result);
             if let Some(cookie) = set_cookie_header {
                 // Insert Set-Cookie header if needed
                 let mut resp_str = String::from_utf8_lossy(&response).to_string();
@@ -372,7 +375,7 @@ fn handle_request(
             route.index.as_deref(),
             route.directory_listing.unwrap_or(false),
         );
-        let mut response = match &file_response {
+        let response = match &file_response {
             FileResponse::Ok(_) | FileResponse::DirectoryListing(_) => {
                 build_http_response(file_response)
             }
@@ -436,6 +439,12 @@ fn handle_request(
     })
 }
 
+/// Mio event loop for a given server.
+///
+/// Why: Multiplex non-blocking I/O to handle many connections in one thread.
+/// How: Registers listeners, accepts clients, buffers reads until a full
+/// request is present (Content-Length or chunked end), calls `handle_request`,
+/// then writes and closes. Periodically evicts idle clients (timeout).
 pub fn run_mio_server(
     mut listeners: HashMap<Token, TcpListener>,
     session_manager: &mut SessionManager,
@@ -462,7 +471,7 @@ pub fn run_mio_server(
                 let listener = listeners.get_mut(&token).unwrap();
                 loop {
                     match listener.accept() {
-                        Ok((mut stream, addr)) => {
+                        Ok((mut stream, _)) => {
                             let client_token = Token(next_token);
                             next_token += 1;
                             poll.registry().register(
@@ -581,14 +590,14 @@ pub fn run_mio_server(
                                     session_manager,
                                     server_config,
                                 );
-                            conn.write_buffer = response;
-                            conn.is_writing = true;
+                                conn.write_buffer = response;
+                                conn.is_writing = true;
                                 conn.read_buffer.drain(..total_len);
-                            poll.registry().reregister(
-                                &mut conn.stream,
-                                token,
-                                Interest::WRITABLE,
-                            )?;
+                                poll.registry().reregister(
+                                    &mut conn.stream,
+                                    token,
+                                    Interest::WRITABLE,
+                                )?;
                             } else {
                                 println!(
                                     "DEBUG: Waiting for more data... Need {} more bytes",
@@ -651,15 +660,11 @@ pub fn run_mio_server(
     }
 }
 
-fn handle_path(path: &str) -> io::Result<String> {
-    let mut wd = env::current_dir().unwrap();
-    let file_name = format!("{}.html", path);
-    let html_path = wd.join("html").join(file_name);
-    println!("html path {}", html_path.display());
-    fs::read_to_string(html_path)
-}
-
-// Helper function to find the end of a chunked transfer encoding body
+/// Determine the end offset of a chunked Transfer-Encoding body.
+///
+/// Why: The event loop must know when a chunked request is fully received.
+/// How: Parses hex chunk sizes and advances over `size\r\n<data>\r\n` until
+/// it encounters a zero-sized chunk, then returns the index after `0\r\n\r\n`.
 fn find_chunked_body_end(body: &[u8]) -> Option<usize> {
     let mut i = 0;
     while i < body.len() {

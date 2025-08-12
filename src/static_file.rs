@@ -1,10 +1,15 @@
 // # كود قراءة الملفات الثابتة من المسار المطلوب
 
 use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
+// use std::io;
+use std::path::Path;
 
-/// تمثل نتيجة قراءة الملف: إما نجاح وفيه البايتات، أو خطأ وفيه رسالة
+/// Result of attempting to read a static resource.
+///
+/// Why: Encapsulates the outcome so the caller can build an HTTP response
+/// consistently.
+/// How: Distinguishes success, not found, forbidden, and generated
+/// directory listing HTML.
 pub enum FileResponse {
     Ok(Vec<u8>),
     NotFound,
@@ -12,8 +17,19 @@ pub enum FileResponse {
     DirectoryListing(String),
 }
 
-/// قراءة الملف الثابت من المسار المطلوب
-pub fn read_static_file_with_listing(request_path: &str, base_path: &str, index: Option<&str>, directory_listing: bool) -> FileResponse {
+/// Read a static path relative to `base_path`, with index and optional listing.
+///
+/// Why: Safely serve files from a configured root and optionally list
+/// directories.
+/// How: Canonicalizes the target, prevents path traversal by enforcing that
+/// the resolved path stays under `base_path`, serves `index` for directories if
+/// present, or returns a generated directory listing when enabled.
+pub fn read_static_file_with_listing(
+    request_path: &str,
+    base_path: &str,
+    index: Option<&str>,
+    directory_listing: bool,
+) -> FileResponse {
     let base = Path::new(base_path);
     let full_path = base.join(&request_path.trim_start_matches('/'));
     let full_path = match fs::canonicalize(&full_path) {
@@ -40,7 +56,11 @@ pub fn read_static_file_with_listing(request_path: &str, base_path: &str, index:
             if let Ok(entries) = fs::read_dir(&full_path) {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().to_string();
-                    let display = if entry.path().is_dir() { format!("{}/", name) } else { name.clone() };
+                    let display = if entry.path().is_dir() {
+                        format!("{}/", name)
+                    } else {
+                        name.clone()
+                    };
                     html.push_str(&format!("<li><a href=\"{}\">{}</a></li>", display, display));
                 }
             }
@@ -57,6 +77,11 @@ pub fn read_static_file_with_listing(request_path: &str, base_path: &str, index:
     }
 }
 
+/// Build an HTTP response corresponding to `FileResponse`.
+///
+/// Why: Central mapping from file read outcome to HTTP status/body.
+/// How: Emits minimal headers (defaults to `text/html`) and sets
+/// `Content-Length` to match the payload.
 pub fn build_http_response(file_response: FileResponse) -> Vec<u8> {
     match file_response {
         // 1. الملف موجود ويمكن قرائته
